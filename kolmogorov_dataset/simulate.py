@@ -10,6 +10,7 @@ from typing import Callable, Literal
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+import torch.nn.functional as F
 from tqdm.auto import tqdm
 
 
@@ -22,6 +23,7 @@ class KolmogorovConfig:
     output_dir: str = "data/kolmogorov_64_10k"
     total_images: int = 10_000
     grid_size: int = 64
+    save_grid_size: int = 64
     num_trajectories: int = 500
     max_trajectories: int = 2_000
     snapshots_per_trajectory: int = 20
@@ -243,6 +245,19 @@ def _normalize_velocity(
     return torch.stack((velocity_x, velocity_y), dim=1).div(scale).clamp(-1.0, 1.0)
 
 
+def _coarsen_field(field: torch.Tensor, output_size: int) -> torch.Tensor:
+    input_size = field.shape[-1]
+    if output_size == input_size:
+        return field
+    if input_size % output_size != 0:
+        raise ValueError("grid_size must be divisible by save_grid_size for average pooling")
+    factor = input_size // output_size
+    original_shape = field.shape
+    flat = field.reshape(-1, 1, input_size, input_size)
+    pooled = F.avg_pool2d(flat, kernel_size=factor, stride=factor)
+    return pooled.reshape(*original_shape[:-2], output_size, output_size)
+
+
 def _preview_limits(images: np.ndarray, percentile: float) -> tuple[float, float]:
     values = images[:, 0].astype(np.float32)
     limit = float(np.percentile(np.abs(values), percentile))
@@ -362,6 +377,8 @@ def generate_dataset(
         raise ValueError("output_field must be either 'velocity' or 'vorticity'")
     if config.velocity_scale <= 0.0 or config.vorticity_scale <= 0.0:
         raise ValueError("velocity_scale and vorticity_scale must be positive")
+    if config.save_grid_size <= 0 or config.grid_size % config.save_grid_size != 0:
+        raise ValueError("save_grid_size must be positive and divide grid_size")
 
     device = _resolve_device(config.device)
     if config.num_threads > 0:
@@ -527,6 +544,7 @@ def generate_dataset(
                     and (step_idx - config.burn_in_steps) % config.save_interval == 0
                 ):
                     preview_images = _normalize_vorticity(omega, config.vorticity_scale)[:, None, :, :]
+                    preview_images = _coarsen_field(preview_images, config.save_grid_size)
                     if config.output_field == "velocity":
                         velocity_x, velocity_y = _velocity_from_vorticity(
                             omega,
@@ -540,6 +558,7 @@ def generate_dataset(
                             velocity_y,
                             config.velocity_scale,
                         )
+                        images = _coarsen_field(images, config.save_grid_size)
                     else:
                         images = preview_images
                     images_np = images.detach().cpu().numpy().astype(np_dtype)
@@ -608,9 +627,12 @@ def generate_dataset(
         "total_images": emitted,
         "shape": [
             2 if config.output_field == "velocity" else 1,
-            config.grid_size,
-            config.grid_size,
+            config.save_grid_size,
+            config.save_grid_size,
         ],
+        "simulation_grid_size": config.grid_size,
+        "save_grid_size": config.save_grid_size,
+        "coarsening": "average_pooling" if config.save_grid_size != config.grid_size else "none",
         "value_range": [-1.0, 1.0],
         "field": f"normalized_{config.output_field}",
         "raw_velocity_approx": "u ~= images * velocity_scale when output_field == 'velocity'",

@@ -6,6 +6,8 @@
 forced 2D incompressible Navier-Stokes in vorticity form
 periodic domain
 Kolmogorov-style forcing
+256x256 simulation grid
+average-pooling downscale to 64x64
 10_000 normalized velocity-field snapshots
 64x64 resolution
 FP32 storage
@@ -19,7 +21,8 @@ generate_kolmogorov_64_10k_colab.ipynb
 
 Это не полная реплика NeurIPS SDA paper. В статье использовался Kolmogorov flow / Navier-Stokes
 velocity field. Здесь динамика тоже интегрируется в vorticity form, но в `.npz` сохраняется
-восстановленное velocity field `(u_x, u_y)`, а previews строятся по vorticity.
+восстановленное velocity field `(u_x, u_y)`, а previews строятся по vorticity. Симуляция идет на
+`256x256`, после чего velocity и preview-vorticity огрубляются до `64x64` через average pooling.
 
 Формат:
 
@@ -36,7 +39,10 @@ velocity = images * velocity_scale
 Current preset is tuned for more paper-like, higher-contrast states than the first quick version:
 
 ```text
-dt = 0.01
+dt = 0.005
+simulation grid = 256x256
+saved grid = 64x64
+coarsening = average pooling
 viscosity = 3e-4
 drag = 0.025
 forcing_amp = 0.55

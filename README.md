@@ -16,7 +16,8 @@ single PDE state reconstruction from sparse/noisy observations
 - `kolmogorov_dataset/`: более близкий к статье fluid-like датасет, forced 2D incompressible
   Navier-Stokes in vorticity form with Kolmogorov-style forcing. Текущий Colab preset хранит
   velocity snapshots `(u_x, u_y)` в `float32`, а preview строит по vorticity, как в статье.
-  Для более контрастных vortex-like states используется stronger forcing / lower damping.
+  Симуляция идет на `256x256`, затем average-pooling downscale до `64x64`. Для более контрастных
+  vortex-like states используется stronger forcing / lower damping.
 
 Готовые Colab variants:
 
