@@ -10,6 +10,19 @@
 single PDE state reconstruction from sparse/noisy observations
 ```
 
+## Доступные датасеты
+
+- `grayscott_dataset/`: быстрый reaction-diffusion датасет с attractor-like patterns.
+- `kolmogorov_dataset/`: более близкий к статье fluid-like датасет, forced 2D incompressible
+  Navier-Stokes in vorticity form with Kolmogorov-style forcing.
+
+Готовые Colab variants:
+
+```text
+notebooks/grayscott_128_10k/generate_grayscott_128_10k_colab.ipynb
+notebooks/kolmogorov_64_10k/generate_kolmogorov_64_10k_colab.ipynb
+```
+
 ## Что генерируется
 
 Gray-Scott system:
