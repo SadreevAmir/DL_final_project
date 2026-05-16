@@ -30,6 +30,7 @@ class GrayScottConfig:
     chunk_size: int = 1_000
     sim_batch_size: int = 500
     dt: float = 1.0
+    solver_substeps: int = 1
     du: float = 0.16
     dv: float = 0.08
     param_mode: ParamMode = "mixed"
@@ -44,6 +45,8 @@ class GrayScottConfig:
     save_previews: bool = True
     preview_every_chunks: int = 1
     preview_count: int = 32
+    save_sequence_previews: bool = True
+    sequence_preview_count: int = 16
     min_image_std: float = 0.025
     min_image_range: float = 0.15
 
@@ -135,7 +138,11 @@ def _initial_state(
         active = (blob_count > j).float().view(batch, 1, 1)
         cx = torch.rand((batch, 1, 1), device=device, generator=generator) * w
         cy = torch.rand((batch, 1, 1), device=device, generator=generator) * h
-        sigma = (2.5 + 5.5 * torch.rand((batch, 1, 1), device=device, generator=generator))
+        scale = grid_size / 64.0
+        sigma = (
+            scale
+            * (2.5 + 5.5 * torch.rand((batch, 1, 1), device=device, generator=generator))
+        )
         amp = 0.45 + 0.35 * torch.rand((batch, 1, 1), device=device, generator=generator)
 
         dx = torch.minimum((xx - cx).abs(), w - (xx - cx).abs())
@@ -257,9 +264,95 @@ def _save_preview(
     return path
 
 
+def _save_sequence_preview(
+    output_dir: Path,
+    chunk_id: int,
+    images: np.ndarray,
+    trajectory_ids: np.ndarray,
+    steps: np.ndarray,
+    max_frames: int,
+) -> Path | None:
+    if images.shape[0] == 0:
+        return None
+
+    channel_index = 1 if images.shape[1] > 1 else 0
+    best_id: int | None = None
+    best_score = -np.inf
+
+    for trajectory_id in np.unique(trajectory_ids):
+        idx = np.flatnonzero(trajectory_ids == trajectory_id)
+        if idx.size < 2:
+            continue
+        field = images[idx, channel_index].astype(np.float32)
+        score = float(field.reshape(field.shape[0], -1).std(axis=1).mean()) + 0.01 * idx.size
+        if score > best_score:
+            best_id = int(trajectory_id)
+            best_score = score
+
+    if best_id is None:
+        return None
+
+    idx = np.flatnonzero(trajectory_ids == best_id)
+    idx = idx[np.argsort(steps[idx])]
+    idx = idx[:max_frames]
+
+    cols = min(max_frames, idx.size)
+    fig, axes = plt.subplots(1, cols, figsize=(1.45 * cols, 1.7))
+    axes_np = np.atleast_1d(axes).ravel()
+
+    for ax, sample_idx in zip(axes_np, idx):
+        ax.imshow(images[sample_idx, channel_index], cmap="magma", vmin=0.0, vmax=1.0)
+        ax.set_title(f"t={int(steps[sample_idx])}", fontsize=7)
+        ax.axis("off")
+
+    fig.suptitle(f"Trajectory {best_id}, consecutive snapshots from chunk {chunk_id:03d}", fontsize=10)
+    fig.tight_layout()
+    path = output_dir / f"sequence_preview_chunk_{chunk_id:03d}.png"
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    return path
+
+
+def _save_batch_sequence_preview(
+    output_dir: Path,
+    batch_idx: int,
+    trajectory_ids: np.ndarray,
+    sequence_images: list[np.ndarray],
+    sequence_steps: list[int],
+    max_frames: int,
+) -> Path | None:
+    if len(sequence_images) < 2:
+        return None
+
+    sequence = np.stack(sequence_images, axis=0)
+    channel_index = 1 if sequence.shape[2] > 1 else 0
+    field = sequence[:, :, channel_index].astype(np.float32)
+    scores = field.reshape(field.shape[0], field.shape[1], -1).std(axis=2).mean(axis=0)
+    local_id = int(np.argmax(scores))
+
+    frame_ids = np.arange(min(max_frames, sequence.shape[0]))
+    cols = len(frame_ids)
+    fig, axes = plt.subplots(1, cols, figsize=(1.45 * cols, 1.7))
+    axes_np = np.atleast_1d(axes).ravel()
+
+    for ax, frame_id in zip(axes_np, frame_ids):
+        ax.imshow(sequence[frame_id, local_id, channel_index], cmap="magma", vmin=0.0, vmax=1.0)
+        ax.set_title(f"t={sequence_steps[frame_id]}", fontsize=7)
+        ax.axis("off")
+
+    trajectory_id = int(trajectory_ids[local_id])
+    fig.suptitle(f"Trajectory {trajectory_id}, consecutive snapshots from batch {batch_idx:03d}", fontsize=10)
+    fig.tight_layout()
+    path = output_dir / f"sequence_preview_batch_{batch_idx:03d}.png"
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    return path
+
+
 def generate_dataset(
     config: GrayScottConfig,
     on_chunk_saved: Callable[[Path], None] | None = None,
+    on_preview_saved: Callable[[Path], None] | None = None,
 ) -> list[Path]:
     """Generate Gray-Scott long-time snapshots and save them as NPZ chunks.
 
@@ -275,6 +368,9 @@ def generate_dataset(
             "max_trajectories * snapshots_per_trajectory must be >= total_images"
         )
 
+    if config.solver_substeps < 1:
+        raise ValueError("solver_substeps must be >= 1")
+
     device = _resolve_device(config.device)
     if config.num_threads > 0:
         torch.set_num_threads(config.num_threads)
@@ -289,6 +385,7 @@ def generate_dataset(
 
     saved_paths: list[Path] = []
     preview_paths: list[Path] = []
+    sequence_preview_paths: list[Path] = []
     chunk_id = 0
     emitted = 0
     rejected = 0
@@ -359,6 +456,8 @@ def generate_dataset(
                     and chunk_id % config.preview_every_chunks == 0
                 ):
                     chunk_images = np.concatenate(buffers["images"], axis=0)
+                    chunk_trajectory_id = np.concatenate(buffers["trajectory_id"], axis=0)
+                    chunk_steps = np.concatenate(buffers["step"], axis=0)
                     preview_path = _save_preview(
                         output_dir=output_dir,
                         chunk_id=chunk_id,
@@ -366,6 +465,21 @@ def generate_dataset(
                         max_images=config.preview_count,
                     )
                     preview_paths.append(preview_path)
+                    if on_preview_saved is not None:
+                        on_preview_saved(preview_path)
+                    if config.save_sequence_previews:
+                        sequence_path = _save_sequence_preview(
+                            output_dir=output_dir,
+                            chunk_id=chunk_id,
+                            images=chunk_images,
+                            trajectory_ids=chunk_trajectory_id,
+                            steps=chunk_steps,
+                            max_frames=config.sequence_preview_count,
+                        )
+                        if sequence_path is not None:
+                            sequence_preview_paths.append(sequence_path)
+                            if on_preview_saved is not None:
+                                on_preview_saved(sequence_path)
                 if on_chunk_saved is not None:
                     on_chunk_saved(path)
                 for value in buffers.values():
@@ -375,6 +489,7 @@ def generate_dataset(
                 progress.set_postfix(
                     chunks=len(saved_paths),
                     previews=len(preview_paths),
+                    sequences=len(sequence_preview_paths),
                     refresh=False,
                 )
 
@@ -404,17 +519,21 @@ def generate_dataset(
                 + config.snapshots_per_trajectory * config.save_interval
             )
             snapshot_idx = 0
+            step_dt = config.dt / config.solver_substeps
+            batch_sequence_images: list[np.ndarray] = []
+            batch_sequence_steps: list[int] = []
 
             for step_idx in range(1, total_steps + 1):
-                uvv = u * v * v
-                u = u + config.dt * (
-                    config.du * _laplacian_periodic(u) - uvv + f * (1.0 - u)
-                )
-                v = v + config.dt * (
-                    config.dv * _laplacian_periodic(v) + uvv - (f + k) * v
-                )
-                u = u.clamp(0.0, 1.0)
-                v = v.clamp(0.0, 1.0)
+                for _ in range(config.solver_substeps):
+                    uvv = u * v * v
+                    u = u + step_dt * (
+                        config.du * _laplacian_periodic(u) - uvv + f * (1.0 - u)
+                    )
+                    v = v + step_dt * (
+                        config.dv * _laplacian_periodic(v) + uvv - (f + k) * v
+                    )
+                    u = u.clamp(0.0, 1.0)
+                    v = v.clamp(0.0, 1.0)
 
                 if (
                     step_idx > config.burn_in_steps
@@ -426,6 +545,9 @@ def generate_dataset(
                         images = torch.stack((u, v), dim=1)
 
                     images_np = images.detach().cpu().numpy().astype(np_dtype)
+                    if config.save_sequence_previews:
+                        batch_sequence_images.append(images_np)
+                        batch_sequence_steps.append(step_idx)
                     count = images_np.shape[0]
                     keep = _quality_mask(
                         images=images_np,
@@ -460,6 +582,20 @@ def generate_dataset(
                     if emitted >= config.total_images:
                         break
 
+            if config.save_sequence_previews:
+                sequence_path = _save_batch_sequence_preview(
+                    output_dir=output_dir,
+                    batch_idx=batch_idx,
+                    trajectory_ids=traj_ids,
+                    sequence_images=batch_sequence_images,
+                    sequence_steps=batch_sequence_steps,
+                    max_frames=config.sequence_preview_count,
+                )
+                if sequence_path is not None:
+                    sequence_preview_paths.append(sequence_path)
+                    if on_preview_saved is not None:
+                        on_preview_saved(sequence_path)
+
     if emitted < config.total_images:
         raise RuntimeError(
             f"Only accepted {emitted} images after simulating "
@@ -484,6 +620,8 @@ def generate_dataset(
         saved_paths.append(path)
         if config.save_previews and config.preview_every_chunks > 0:
             chunk_images = np.concatenate(buffers["images"], axis=0)
+            chunk_trajectory_id = np.concatenate(buffers["trajectory_id"], axis=0)
+            chunk_steps = np.concatenate(buffers["step"], axis=0)
             preview_path = _save_preview(
                 output_dir=output_dir,
                 chunk_id=chunk_id,
@@ -491,6 +629,21 @@ def generate_dataset(
                 max_images=config.preview_count,
             )
             preview_paths.append(preview_path)
+            if on_preview_saved is not None:
+                on_preview_saved(preview_path)
+            if config.save_sequence_previews:
+                sequence_path = _save_sequence_preview(
+                    output_dir=output_dir,
+                    chunk_id=chunk_id,
+                    images=chunk_images,
+                    trajectory_ids=chunk_trajectory_id,
+                    steps=chunk_steps,
+                    max_frames=config.sequence_preview_count,
+                )
+                if sequence_path is not None:
+                    sequence_preview_paths.append(sequence_path)
+                    if on_preview_saved is not None:
+                        on_preview_saved(sequence_path)
         if on_chunk_saved is not None:
             on_chunk_saved(path)
 
@@ -510,6 +663,7 @@ def generate_dataset(
         "accepted_images": emitted,
         "files": [path.name for path in saved_paths],
         "previews": [path.name for path in preview_paths],
+        "sequence_previews": [path.name for path in sequence_preview_paths],
     }
     (output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
     return saved_paths
