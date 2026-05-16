@@ -40,9 +40,10 @@ class KolmogorovConfig:
     initial_amplitude: float = 1.5
     spectral_filter_scale: float = 12.0
     output_field: OutputField = "velocity"
+    normalize_output: bool = False
     velocity_scale: float = 1.0
     vorticity_scale: float = 6.0
-    vorticity_clip: float = 60.0
+    vorticity_clip: float = 0.0
     dtype: str = "float32"
     compress: bool = False
     seed: int = 123
@@ -51,7 +52,6 @@ class KolmogorovConfig:
     save_previews: bool = True
     preview_every_chunks: int = 1
     preview_count: int = 32
-    preview_percentile: float = 99.0
     save_sequence_previews: bool = True
     sequence_preview_count: int = 16
     min_image_std: float = 0.03
@@ -234,7 +234,7 @@ def _rk4_step(
 
 
 def _normalize_vorticity(omega: torch.Tensor, scale: float) -> torch.Tensor:
-    return (omega / scale).clamp(-1.0, 1.0)
+    return omega / scale
 
 
 def _normalize_velocity(
@@ -242,7 +242,7 @@ def _normalize_velocity(
     velocity_y: torch.Tensor,
     scale: float,
 ) -> torch.Tensor:
-    return torch.stack((velocity_x, velocity_y), dim=1).div(scale).clamp(-1.0, 1.0)
+    return torch.stack((velocity_x, velocity_y), dim=1).div(scale)
 
 
 def _coarsen_field(field: torch.Tensor, output_size: int) -> torch.Tensor:
@@ -256,13 +256,6 @@ def _coarsen_field(field: torch.Tensor, output_size: int) -> torch.Tensor:
     flat = field.reshape(-1, 1, input_size, input_size)
     pooled = F.avg_pool2d(flat, kernel_size=factor, stride=factor)
     return pooled.reshape(*original_shape[:-2], output_size, output_size)
-
-
-def _preview_limits(images: np.ndarray, percentile: float) -> tuple[float, float]:
-    values = images[:, 0].astype(np.float32)
-    limit = float(np.percentile(np.abs(values), percentile))
-    limit = max(limit, 1.0e-3)
-    return -limit, limit
 
 
 def _quality_mask(images: np.ndarray, min_std: float, min_range: float) -> np.ndarray:
@@ -280,10 +273,8 @@ def _save_preview(
     chunk_id: int,
     images: np.ndarray,
     max_images: int,
-    percentile: float,
 ) -> Path:
     count = min(max_images, images.shape[0])
-    vmin, vmax = _preview_limits(images[:count], percentile)
     cols = min(8, count)
     rows = int(math.ceil(count / cols))
     fig, axes = plt.subplots(rows, cols, figsize=(1.55 * cols, 1.55 * rows))
@@ -291,7 +282,7 @@ def _save_preview(
     for ax in axes_np:
         ax.axis("off")
     for ax, image in zip(axes_np, images[:count]):
-        ax.imshow(image[0], cmap="RdBu_r", vmin=vmin, vmax=vmax)
+        ax.imshow(image[0], cmap="RdBu_r")
     fig.suptitle(f"Kolmogorov vorticity samples, chunk {chunk_id:03d}", fontsize=12)
     fig.tight_layout()
     path = output_dir / f"preview_chunk_{chunk_id:03d}.png"
@@ -307,7 +298,6 @@ def _save_sequence_preview(
     sequence_images: list[np.ndarray],
     sequence_steps: list[int],
     max_frames: int,
-    percentile: float,
 ) -> Path | None:
     if len(sequence_images) < 2:
         return None
@@ -316,12 +306,11 @@ def _save_sequence_preview(
     scores = field.reshape(field.shape[0], field.shape[1], -1).std(axis=2).mean(axis=0)
     local_id = int(np.argmax(scores))
     frame_ids = np.arange(min(max_frames, sequence.shape[0]))
-    vmin, vmax = _preview_limits(sequence[frame_ids, local_id], percentile)
 
     fig, axes = plt.subplots(1, len(frame_ids), figsize=(1.45 * len(frame_ids), 1.7))
     axes_np = np.atleast_1d(axes).ravel()
     for ax, frame_id in zip(axes_np, frame_ids):
-        ax.imshow(sequence[frame_id, local_id, 0], cmap="RdBu_r", vmin=vmin, vmax=vmax)
+        ax.imshow(sequence[frame_id, local_id, 0], cmap="RdBu_r")
         ax.set_title(f"t={sequence_steps[frame_id]}", fontsize=7)
         ax.axis("off")
     trajectory_id = int(trajectory_ids[local_id])
@@ -446,7 +435,6 @@ def generate_dataset(
                 chunk_id,
                 chunk_images,
                 config.preview_count,
-                config.preview_percentile,
             )
             preview_paths.append(preview_path)
             if on_preview_saved is not None:
@@ -537,13 +525,17 @@ def generate_dataset(
                     dealias,
                 )
                 omega = omega - omega.mean(dim=(-2, -1), keepdim=True)
-                omega = omega.clamp(-config.vorticity_clip, config.vorticity_clip)
+                if config.vorticity_clip > 0.0:
+                    omega = omega.clamp(-config.vorticity_clip, config.vorticity_clip)
 
                 if (
                     step_idx > config.burn_in_steps
                     and (step_idx - config.burn_in_steps) % config.save_interval == 0
                 ):
-                    preview_images = _normalize_vorticity(omega, config.vorticity_scale)[:, None, :, :]
+                    if config.normalize_output:
+                        preview_images = _normalize_vorticity(omega, config.vorticity_scale)[:, None, :, :]
+                    else:
+                        preview_images = omega[:, None, :, :]
                     preview_images = _coarsen_field(preview_images, config.save_grid_size)
                     if config.output_field == "velocity":
                         velocity_x, velocity_y = _velocity_from_vorticity(
@@ -553,11 +545,14 @@ def generate_dataset(
                             ky,
                             dealias,
                         )
-                        images = _normalize_velocity(
-                            velocity_x,
-                            velocity_y,
-                            config.velocity_scale,
-                        )
+                        if config.normalize_output:
+                            images = _normalize_velocity(
+                                velocity_x,
+                                velocity_y,
+                                config.velocity_scale,
+                            )
+                        else:
+                            images = torch.stack((velocity_x, velocity_y), dim=1)
                         images = _coarsen_field(images, config.save_grid_size)
                     else:
                         images = preview_images
@@ -601,7 +596,6 @@ def generate_dataset(
                     sequence_images=sequence_images,
                     sequence_steps=sequence_steps,
                     max_frames=config.sequence_preview_count,
-                    percentile=config.preview_percentile,
                 )
                 if sequence_path is not None:
                     sequence_preview_paths.append(sequence_path)
@@ -633,11 +627,26 @@ def generate_dataset(
         "simulation_grid_size": config.grid_size,
         "save_grid_size": config.save_grid_size,
         "coarsening": "average_pooling" if config.save_grid_size != config.grid_size else "none",
-        "value_range": [-1.0, 1.0],
-        "field": f"normalized_{config.output_field}",
-        "raw_velocity_approx": "u ~= images * velocity_scale when output_field == 'velocity'",
-        "preview_field": "normalized_vorticity",
-        "raw_vorticity_approx": "omega ~= preview_images * vorticity_scale; preview_images are not saved in chunks",
+        "normalization": "fixed_scale" if config.normalize_output else "none",
+        "value_range": "unbounded_raw_values" if not config.normalize_output else [-1.0, 1.0],
+        "field": (
+            f"normalized_{config.output_field}"
+            if config.normalize_output
+            else f"raw_{config.output_field}"
+        ),
+        "raw_velocity_approx": (
+            "u ~= images * velocity_scale when output_field == 'velocity'"
+            if config.normalize_output
+            else "u == images when output_field == 'velocity'"
+        ),
+        "preview_field": (
+            "normalized_vorticity" if config.normalize_output else "raw_vorticity"
+        ),
+        "raw_vorticity_approx": (
+            "omega ~= preview_images * vorticity_scale; preview_images are not saved in chunks"
+            if config.normalize_output
+            else "omega == preview_images; preview_images are not saved in chunks"
+        ),
         "elapsed_seconds": time.time() - start_time,
         "simulated_trajectories": simulated_trajectories,
         "rejected_images": rejected,

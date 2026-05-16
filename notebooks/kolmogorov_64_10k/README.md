@@ -8,7 +8,7 @@ periodic domain
 Kolmogorov-style forcing
 256x256 simulation grid
 average-pooling downscale to 64x64
-10_000 normalized velocity-field snapshots
+10_000 raw velocity-field snapshots
 64x64 resolution
 FP32 storage
 ```
@@ -27,13 +27,13 @@ velocity field. Здесь динамика тоже интегрируется 
 Формат:
 
 ```python
-images  # [N, 2, 64, 64], float32, normalized velocity (u_x, u_y) in [-1, 1]
+images  # [N, 2, 64, 64], float32, raw velocity (u_x, u_y)
 ```
 
 Приблизительно:
 
 ```python
-velocity = images * velocity_scale
+velocity = images
 ```
 
 Current preset is tuned for more paper-like, higher-contrast states than the first quick version:
@@ -49,8 +49,9 @@ forcing_amp = 0.55
 burn_in_steps = 5000
 dtype = float32
 output_field = velocity
+normalize_output = false
 ```
 
-Preview images use robust adaptive contrast based on the 99th percentile and show derived vorticity,
-matching the visualization convention used in the paper. The saved arrays are fixed-scale normalized
-velocity values in `[-1, 1]`.
+Preview images use plain `imshow(..., cmap="RdBu_r")` and show derived raw vorticity, matching
+the visualization convention used in the paper. The saved arrays are raw velocity values; normalize
+them later using train-set statistics during model training.

@@ -23,8 +23,8 @@ matches the paper's state representation more closely:
 
 ```python
 images  # [N, 2, 64, 64], float32
-images[:, 0]  # normalized u_x
-images[:, 1]  # normalized u_y
+images[:, 0]  # raw u_x
+images[:, 1]  # raw u_y
 ```
 
 Preview images show vorticity derived during simulation. Split shards are written as:

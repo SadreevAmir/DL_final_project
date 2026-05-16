@@ -15,7 +15,7 @@ single PDE state reconstruction from sparse/noisy observations
 - `grayscott_dataset/`: быстрый reaction-diffusion датасет с attractor-like patterns.
 - `kolmogorov_dataset/`: более близкий к статье fluid-like датасет, forced 2D incompressible
   Navier-Stokes in vorticity form with Kolmogorov-style forcing. Текущий Colab preset хранит
-  velocity snapshots `(u_x, u_y)` в `float32`, а preview строит по vorticity, как в статье.
+  raw velocity snapshots `(u_x, u_y)` в `float32`, без scaling/clipping, а preview строит по raw vorticity через обычный `imshow`.
   Симуляция идет на `256x256`, затем average-pooling downscale до `64x64`. Для более контрастных
   vortex-like states используется stronger forcing / lower damping.
 
