@@ -24,6 +24,7 @@ single PDE state reconstruction from sparse/noisy observations
 ```text
 notebooks/grayscott_128_10k/generate_grayscott_128_10k_colab.ipynb
 notebooks/kolmogorov_64_10k/generate_kolmogorov_64_10k_colab.ipynb
+notebooks/kolmogorov_256_to_64_100k/generate_kolmogorov_256_to_64_100k_colab.ipynb
 ```
 
 ## Что генерируется
