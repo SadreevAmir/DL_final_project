@@ -24,21 +24,21 @@ class KolmogorovConfig:
     num_trajectories: int = 500
     max_trajectories: int = 2_000
     snapshots_per_trajectory: int = 20
-    burn_in_steps: int = 2_000
+    burn_in_steps: int = 5_000
     save_interval: int = 20
     chunk_size: int = 1_000
-    sim_batch_size: int = 128
-    dt: float = 0.02
-    viscosity: float = 1.0e-3
-    drag: float = 0.10
-    forcing_amp: float = 0.12
+    sim_batch_size: int = 96
+    dt: float = 0.01
+    viscosity: float = 3.0e-4
+    drag: float = 0.025
+    forcing_amp: float = 0.55
     forcing_mode: int = 4
     param_mode: ParamMode = "mixed"
-    initial_amplitude: float = 0.8
-    spectral_filter_scale: float = 8.0
-    vorticity_scale: float = 8.0
-    vorticity_clip: float = 20.0
-    dtype: str = "float16"
+    initial_amplitude: float = 1.5
+    spectral_filter_scale: float = 12.0
+    vorticity_scale: float = 6.0
+    vorticity_clip: float = 60.0
+    dtype: str = "float32"
     compress: bool = False
     seed: int = 123
     device: str = "auto"
@@ -46,6 +46,7 @@ class KolmogorovConfig:
     save_previews: bool = True
     preview_every_chunks: int = 1
     preview_count: int = 32
+    preview_percentile: float = 99.0
     save_sequence_previews: bool = True
     sequence_preview_count: int = 16
     min_image_std: float = 0.03
@@ -115,9 +116,9 @@ def _sample_parameters(
         0.35 * torch.randn((batch, 1, 1), device=device, generator=generator)
     )
     return (
-        viscosity.clamp(3.0e-4, 4.0e-3),
-        drag.clamp(0.04, 0.22),
-        forcing.clamp(0.04, 0.28),
+        viscosity.clamp(1.0e-4, 1.2e-3),
+        drag.clamp(0.008, 0.060),
+        forcing.clamp(0.25, 1.20),
     )
 
 
@@ -216,6 +217,13 @@ def _normalize_vorticity(omega: torch.Tensor, scale: float) -> torch.Tensor:
     return (omega / scale).clamp(-1.0, 1.0)
 
 
+def _preview_limits(images: np.ndarray, percentile: float) -> tuple[float, float]:
+    values = images[:, 0].astype(np.float32)
+    limit = float(np.percentile(np.abs(values), percentile))
+    limit = max(limit, 1.0e-3)
+    return -limit, limit
+
+
 def _quality_mask(images: np.ndarray, min_std: float, min_range: float) -> np.ndarray:
     if min_std <= 0.0 and min_range <= 0.0:
         return np.ones(images.shape[0], dtype=bool)
@@ -226,8 +234,15 @@ def _quality_mask(images: np.ndarray, min_std: float, min_range: float) -> np.nd
     return finite & (std >= min_std) & (value_range >= min_range)
 
 
-def _save_preview(output_dir: Path, chunk_id: int, images: np.ndarray, max_images: int) -> Path:
+def _save_preview(
+    output_dir: Path,
+    chunk_id: int,
+    images: np.ndarray,
+    max_images: int,
+    percentile: float,
+) -> Path:
     count = min(max_images, images.shape[0])
+    vmin, vmax = _preview_limits(images[:count], percentile)
     cols = min(8, count)
     rows = int(math.ceil(count / cols))
     fig, axes = plt.subplots(rows, cols, figsize=(1.55 * cols, 1.55 * rows))
@@ -235,7 +250,7 @@ def _save_preview(output_dir: Path, chunk_id: int, images: np.ndarray, max_image
     for ax in axes_np:
         ax.axis("off")
     for ax, image in zip(axes_np, images[:count]):
-        ax.imshow(image[0], cmap="RdBu_r", vmin=-1.0, vmax=1.0)
+        ax.imshow(image[0], cmap="RdBu_r", vmin=vmin, vmax=vmax)
     fig.suptitle(f"Kolmogorov vorticity samples, chunk {chunk_id:03d}", fontsize=12)
     fig.tight_layout()
     path = output_dir / f"preview_chunk_{chunk_id:03d}.png"
@@ -251,6 +266,7 @@ def _save_sequence_preview(
     sequence_images: list[np.ndarray],
     sequence_steps: list[int],
     max_frames: int,
+    percentile: float,
 ) -> Path | None:
     if len(sequence_images) < 2:
         return None
@@ -259,11 +275,12 @@ def _save_sequence_preview(
     scores = field.reshape(field.shape[0], field.shape[1], -1).std(axis=2).mean(axis=0)
     local_id = int(np.argmax(scores))
     frame_ids = np.arange(min(max_frames, sequence.shape[0]))
+    vmin, vmax = _preview_limits(sequence[frame_ids, local_id], percentile)
 
     fig, axes = plt.subplots(1, len(frame_ids), figsize=(1.45 * len(frame_ids), 1.7))
     axes_np = np.atleast_1d(axes).ravel()
     for ax, frame_id in zip(axes_np, frame_ids):
-        ax.imshow(sequence[frame_id, local_id, 0], cmap="RdBu_r", vmin=-1.0, vmax=1.0)
+        ax.imshow(sequence[frame_id, local_id, 0], cmap="RdBu_r", vmin=vmin, vmax=vmax)
         ax.set_title(f"t={sequence_steps[frame_id]}", fontsize=7)
         ax.axis("off")
     trajectory_id = int(trajectory_ids[local_id])
@@ -376,7 +393,13 @@ def generate_dataset(
             and chunk_id % config.preview_every_chunks == 0
         ):
             chunk_images = np.concatenate(buffers["images"], axis=0)
-            preview_path = _save_preview(output_dir, chunk_id, chunk_images, config.preview_count)
+            preview_path = _save_preview(
+                output_dir,
+                chunk_id,
+                chunk_images,
+                config.preview_count,
+                config.preview_percentile,
+            )
             preview_paths.append(preview_path)
             if on_preview_saved is not None:
                 on_preview_saved(preview_path)
@@ -505,6 +528,7 @@ def generate_dataset(
                     sequence_images=sequence_images,
                     sequence_steps=sequence_steps,
                     max_frames=config.sequence_preview_count,
+                    percentile=config.preview_percentile,
                 )
                 if sequence_path is not None:
                     sequence_preview_paths.append(sequence_path)

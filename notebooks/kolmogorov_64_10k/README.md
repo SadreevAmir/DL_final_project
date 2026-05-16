@@ -8,6 +8,7 @@ periodic domain
 Kolmogorov-style forcing
 10_000 normalized vorticity snapshots
 64x64 resolution
+FP32 storage
 ```
 
 Notebook:
@@ -23,7 +24,7 @@ velocity field, а здесь используется более простой
 Формат:
 
 ```python
-images  # [N, 1, 64, 64], float16, normalized vorticity in [-1, 1]
+images  # [N, 1, 64, 64], float32, normalized vorticity in [-1, 1]
 ```
 
 Приблизительно:
@@ -31,3 +32,17 @@ images  # [N, 1, 64, 64], float16, normalized vorticity in [-1, 1]
 ```python
 omega = images * vorticity_scale
 ```
+
+Current preset is tuned for more paper-like, higher-contrast states than the first quick version:
+
+```text
+dt = 0.01
+viscosity = 3e-4
+drag = 0.025
+forcing_amp = 0.55
+burn_in_steps = 5000
+dtype = float32
+```
+
+Preview images use robust adaptive contrast based on the 99th percentile. The saved arrays are still
+fixed-scale normalized vorticity values in `[-1, 1]`.
