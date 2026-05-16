@@ -14,6 +14,7 @@ from tqdm.auto import tqdm
 
 
 ParamMode = Literal["fixed", "mixed"]
+OutputField = Literal["velocity", "vorticity"]
 
 
 @dataclass(frozen=True)
@@ -36,6 +37,8 @@ class KolmogorovConfig:
     param_mode: ParamMode = "mixed"
     initial_amplitude: float = 1.5
     spectral_filter_scale: float = 12.0
+    output_field: OutputField = "velocity"
+    velocity_scale: float = 1.0
     vorticity_scale: float = 6.0
     vorticity_clip: float = 60.0
     dtype: str = "float32"
@@ -171,6 +174,21 @@ def _rhs(
     return torch.fft.irfft2(rhs_hat, s=(n, n)) + forcing_amp * forcing_field
 
 
+def _velocity_from_vorticity(
+    omega: torch.Tensor,
+    inv_k2: torch.Tensor,
+    kx: torch.Tensor,
+    ky: torch.Tensor,
+    dealias: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    n = omega.shape[-1]
+    omega_hat = torch.fft.rfft2(omega) * dealias
+    psi_hat = omega_hat * inv_k2
+    velocity_x = torch.fft.irfft2(1j * ky * psi_hat, s=(n, n))
+    velocity_y = torch.fft.irfft2(-1j * kx * psi_hat, s=(n, n))
+    return velocity_x, velocity_y
+
+
 def _rk4_step(
     omega: torch.Tensor,
     dt: float,
@@ -215,6 +233,14 @@ def _rk4_step(
 
 def _normalize_vorticity(omega: torch.Tensor, scale: float) -> torch.Tensor:
     return (omega / scale).clamp(-1.0, 1.0)
+
+
+def _normalize_velocity(
+    velocity_x: torch.Tensor,
+    velocity_y: torch.Tensor,
+    scale: float,
+) -> torch.Tensor:
+    return torch.stack((velocity_x, velocity_y), dim=1).div(scale).clamp(-1.0, 1.0)
 
 
 def _preview_limits(images: np.ndarray, percentile: float) -> tuple[float, float]:
@@ -332,6 +358,10 @@ def generate_dataset(
         raise ValueError("max_trajectories must be >= num_trajectories")
     if config.max_trajectories * config.snapshots_per_trajectory < config.total_images:
         raise ValueError("max_trajectories * snapshots_per_trajectory must be >= total_images")
+    if config.output_field not in ("velocity", "vorticity"):
+        raise ValueError("output_field must be either 'velocity' or 'vorticity'")
+    if config.velocity_scale <= 0.0 or config.vorticity_scale <= 0.0:
+        raise ValueError("velocity_scale and vorticity_scale must be positive")
 
     device = _resolve_device(config.device)
     if config.num_threads > 0:
@@ -361,6 +391,7 @@ def generate_dataset(
 
     buffers: dict[str, list[np.ndarray]] = {
         "images": [],
+        "preview_images": [],
         "trajectory_id": [],
         "snapshot_index": [],
         "step": [],
@@ -392,7 +423,7 @@ def generate_dataset(
             and config.preview_every_chunks > 0
             and chunk_id % config.preview_every_chunks == 0
         ):
-            chunk_images = np.concatenate(buffers["images"], axis=0)
+            chunk_images = np.concatenate(buffers["preview_images"], axis=0)
             preview_path = _save_preview(
                 output_dir,
                 chunk_id,
@@ -412,6 +443,7 @@ def generate_dataset(
 
     def append_records(
         images_np: np.ndarray,
+        preview_images_np: np.ndarray,
         traj_np: np.ndarray,
         snap_np: np.ndarray,
         step_np: np.ndarray,
@@ -427,6 +459,7 @@ def generate_dataset(
             room = config.chunk_size - buffer_count
             take = min(room, remaining, config.total_images - emitted)
             buffers["images"].append(images_np[offset : offset + take])
+            buffers["preview_images"].append(preview_images_np[offset : offset + take])
             buffers["trajectory_id"].append(traj_np[offset : offset + take])
             buffers["snapshot_index"].append(snap_np[offset : offset + take])
             buffers["step"].append(step_np[offset : offset + take])
@@ -493,18 +526,39 @@ def generate_dataset(
                     step_idx > config.burn_in_steps
                     and (step_idx - config.burn_in_steps) % config.save_interval == 0
                 ):
-                    images = _normalize_vorticity(omega, config.vorticity_scale)[:, None, :, :]
+                    preview_images = _normalize_vorticity(omega, config.vorticity_scale)[:, None, :, :]
+                    if config.output_field == "velocity":
+                        velocity_x, velocity_y = _velocity_from_vorticity(
+                            omega,
+                            inv_k2,
+                            kx,
+                            ky,
+                            dealias,
+                        )
+                        images = _normalize_velocity(
+                            velocity_x,
+                            velocity_y,
+                            config.velocity_scale,
+                        )
+                    else:
+                        images = preview_images
                     images_np = images.detach().cpu().numpy().astype(np_dtype)
+                    preview_images_np = preview_images.detach().cpu().numpy().astype(np_dtype)
                     if config.save_sequence_previews:
-                        sequence_images.append(images_np)
+                        sequence_images.append(preview_images_np)
                         sequence_steps.append(step_idx)
 
                     count = images_np.shape[0]
-                    keep = _quality_mask(images_np, config.min_image_std, config.min_image_range)
+                    keep = _quality_mask(
+                        preview_images_np,
+                        config.min_image_std,
+                        config.min_image_range,
+                    )
                     rejected += int((~keep).sum())
                     if keep.any():
                         append_records(
                             images_np=images_np[keep],
+                            preview_images_np=preview_images_np[keep],
                             traj_np=traj_ids[keep].copy(),
                             snap_np=np.full(count, snapshot_idx, dtype=np.int16)[keep],
                             step_np=np.full(count, step_idx, dtype=np.int32)[keep],
@@ -552,10 +606,16 @@ def generate_dataset(
         "device": str(device),
         "num_chunks": len(saved_paths),
         "total_images": emitted,
-        "shape": [1, config.grid_size, config.grid_size],
+        "shape": [
+            2 if config.output_field == "velocity" else 1,
+            config.grid_size,
+            config.grid_size,
+        ],
         "value_range": [-1.0, 1.0],
-        "field": "normalized_vorticity",
-        "raw_vorticity_approx": "omega ~= images * vorticity_scale",
+        "field": f"normalized_{config.output_field}",
+        "raw_velocity_approx": "u ~= images * velocity_scale when output_field == 'velocity'",
+        "preview_field": "normalized_vorticity",
+        "raw_vorticity_approx": "omega ~= preview_images * vorticity_scale; preview_images are not saved in chunks",
         "elapsed_seconds": time.time() - start_time,
         "simulated_trajectories": simulated_trajectories,
         "rejected_images": rejected,

@@ -6,7 +6,7 @@
 forced 2D incompressible Navier-Stokes in vorticity form
 periodic domain
 Kolmogorov-style forcing
-10_000 normalized vorticity snapshots
+10_000 normalized velocity-field snapshots
 64x64 resolution
 FP32 storage
 ```
@@ -18,19 +18,19 @@ generate_kolmogorov_64_10k_colab.ipynb
 ```
 
 Это не полная реплика NeurIPS SDA paper. В статье использовался Kolmogorov flow / Navier-Stokes
-velocity field, а здесь используется более простой pseudo-spectral vorticity solver, чтобы быстро
-получить похожие vortex-like states для ML-проекта.
+velocity field. Здесь динамика тоже интегрируется в vorticity form, но в `.npz` сохраняется
+восстановленное velocity field `(u_x, u_y)`, а previews строятся по vorticity.
 
 Формат:
 
 ```python
-images  # [N, 1, 64, 64], float32, normalized vorticity in [-1, 1]
+images  # [N, 2, 64, 64], float32, normalized velocity (u_x, u_y) in [-1, 1]
 ```
 
 Приблизительно:
 
 ```python
-omega = images * vorticity_scale
+velocity = images * velocity_scale
 ```
 
 Current preset is tuned for more paper-like, higher-contrast states than the first quick version:
@@ -42,7 +42,9 @@ drag = 0.025
 forcing_amp = 0.55
 burn_in_steps = 5000
 dtype = float32
+output_field = velocity
 ```
 
-Preview images use robust adaptive contrast based on the 99th percentile. The saved arrays are still
-fixed-scale normalized vorticity values in `[-1, 1]`.
+Preview images use robust adaptive contrast based on the 99th percentile and show derived vorticity,
+matching the visualization convention used in the paper. The saved arrays are fixed-scale normalized
+velocity values in `[-1, 1]`.
