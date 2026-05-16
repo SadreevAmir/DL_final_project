@@ -24,12 +24,14 @@ v_t = D_v Laplacian(v) + u v^2 - (F + k) v
 - grid: `64x64`
 - channels: один канал `v`
 - trajectories: `500`
+- max trajectories if quality filtering rejects samples: `2000`
 - snapshots per trajectory: `20`
 - total images: `10_000`
 - burn-in: `2500` explicit Euler steps
 - save interval: `30` steps
 - chunk size: `1000` images
 - preview: PNG-сетка samples после каждого chunk
+- quality filter: отбрасывает почти однородные snapshots
 - boundary condition: periodic
 - saved values: raw concentrations in `[0, 1]`
 
@@ -47,6 +49,7 @@ python scripts/generate_grayscott.py \
   --output-dir data/grayscott_64 \
   --total-images 10000 \
   --num-trajectories 500 \
+  --max-trajectories 2000 \
   --snapshots-per-trajectory 20 \
   --grid-size 64 \
   --burn-in-steps 2500 \
@@ -55,6 +58,8 @@ python scripts/generate_grayscott.py \
   --sim-batch-size 500 \
   --save-previews \
   --preview-every-chunks 1 \
+  --min-image-std 0.025 \
+  --min-image-range 0.15 \
   --num-threads 12 \
   --device auto
 ```
@@ -112,11 +117,23 @@ REPO_URL = "https://github.com/SadreevAmir/DL_final_project.git"
 
 ## Оценка времени
 
-Грубая оценка для `10_000` картинок `64x64`, `500` trajectories, `2500` burn-in steps:
+Грубая оценка для `10_000` хороших картинок `64x64`, `500-2000` possible trajectories,
+`2500` burn-in steps:
 
 - Colab A100, `sim_batch_size=500`: обычно `5-20` минут.
 - Colab T4/L4: обычно `15-45` минут.
 - CPU 12 cores с `--num-threads 12`: может быть `1-3` часа, потому что код векторизован, но PyTorch CPU здесь заметно медленнее GPU.
+
+Если preview показывает пустые/однородные квадраты, это trajectories, которые пришли к почти
+homogeneous fixed point. По умолчанию они отбрасываются фильтром:
+
+```text
+min_image_std = 0.025
+min_image_range = 0.15
+```
+
+Если фильтр слишком строгий и генерация не добирает `total_images`, увеличьте `--max-trajectories`
+или ослабьте thresholds.
 
 Если нужно быстрее для первого smoke test:
 

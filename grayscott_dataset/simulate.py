@@ -23,6 +23,7 @@ class GrayScottConfig:
     total_images: int = 10_000
     grid_size: int = 64
     num_trajectories: int = 500
+    max_trajectories: int = 2_000
     snapshots_per_trajectory: int = 20
     burn_in_steps: int = 2_500
     save_interval: int = 30
@@ -43,6 +44,8 @@ class GrayScottConfig:
     save_previews: bool = True
     preview_every_chunks: int = 1
     preview_count: int = 32
+    min_image_std: float = 0.025
+    min_image_range: float = 0.15
 
 
 def _resolve_device(device: str) -> torch.device:
@@ -165,6 +168,23 @@ def _make_split_by_trajectory(
     return split
 
 
+def _quality_mask(
+    images: np.ndarray,
+    min_std: float,
+    min_range: float,
+) -> np.ndarray:
+    if min_std <= 0.0 and min_range <= 0.0:
+        return np.ones(images.shape[0], dtype=bool)
+
+    # Use the v channel as the visual/physical field of interest. For one-channel
+    # datasets this is channel 0; for two-channel uv datasets it is channel 1.
+    channel_index = 1 if images.shape[1] > 1 else 0
+    flat = images[:, channel_index].astype(np.float32).reshape(images.shape[0], -1)
+    std = flat.std(axis=1)
+    value_range = np.ptp(flat, axis=1)
+    return (std >= min_std) & (value_range >= min_range)
+
+
 def _to_numpy_dtype(dtype: str) -> np.dtype:
     if dtype == "float16":
         return np.float16
@@ -247,9 +267,12 @@ def generate_dataset(
     training, a common preprocessing step is `x = 2 * images - 1`.
     """
 
-    if config.num_trajectories * config.snapshots_per_trajectory < config.total_images:
+    if config.max_trajectories < config.num_trajectories:
+        raise ValueError("max_trajectories must be >= num_trajectories")
+
+    if config.max_trajectories * config.snapshots_per_trajectory < config.total_images:
         raise ValueError(
-            "num_trajectories * snapshots_per_trajectory must be >= total_images"
+            "max_trajectories * snapshots_per_trajectory must be >= total_images"
         )
 
     device = _resolve_device(config.device)
@@ -262,12 +285,14 @@ def generate_dataset(
     torch_generator.manual_seed(config.seed)
 
     np_dtype = _to_numpy_dtype(config.dtype)
-    trajectory_split = _make_split_by_trajectory(config.num_trajectories, config.seed)
+    trajectory_split = _make_split_by_trajectory(config.max_trajectories, config.seed)
 
     saved_paths: list[Path] = []
     preview_paths: list[Path] = []
     chunk_id = 0
     emitted = 0
+    rejected = 0
+    simulated_trajectories = 0
     start_time = time.time()
 
     buffers: dict[str, list[np.ndarray]] = {
@@ -353,7 +378,7 @@ def generate_dataset(
                     refresh=False,
                 )
 
-    total_batches = math.ceil(config.num_trajectories / config.sim_batch_size)
+    total_batches = math.ceil(config.max_trajectories / config.sim_batch_size)
     progress = tqdm(total=config.total_images, desc="Gray-Scott snapshots", unit="img")
 
     with torch.no_grad():
@@ -362,8 +387,9 @@ def generate_dataset(
                 break
 
             start_id = batch_idx * config.sim_batch_size
-            end_id = min(start_id + config.sim_batch_size, config.num_trajectories)
+            end_id = min(start_id + config.sim_batch_size, config.max_trajectories)
             batch = end_id - start_id
+            simulated_trajectories += batch
             traj_ids = np.arange(start_id, end_id, dtype=np.int32)
 
             u, v = _initial_state(batch, config.grid_size, device, torch_generator)
@@ -401,15 +427,31 @@ def generate_dataset(
 
                     images_np = images.detach().cpu().numpy().astype(np_dtype)
                     count = images_np.shape[0]
+                    keep = _quality_mask(
+                        images=images_np,
+                        min_std=config.min_image_std,
+                        min_range=config.min_image_range,
+                    )
+                    rejected += int((~keep).sum())
+                    if not keep.any():
+                        snapshot_idx += 1
+                        progress.set_postfix(
+                            chunks=len(saved_paths),
+                            rejected=rejected,
+                            simulated=simulated_trajectories,
+                            refresh=False,
+                        )
+                        continue
+
                     append_records(
-                        images_np=images_np,
-                        traj_np=traj_ids.copy(),
-                        snap_np=np.full(count, snapshot_idx, dtype=np.int16),
-                        step_np=np.full(count, step_idx, dtype=np.int32),
-                        f_np=f_np.copy(),
-                        k_np=k_np.copy(),
-                        regime_np=regime.copy(),
-                        split_np=split_np.copy(),
+                        images_np=images_np[keep],
+                        traj_np=traj_ids[keep].copy(),
+                        snap_np=np.full(count, snapshot_idx, dtype=np.int16)[keep],
+                        step_np=np.full(count, step_idx, dtype=np.int32)[keep],
+                        f_np=f_np[keep].copy(),
+                        k_np=k_np[keep].copy(),
+                        regime_np=regime[keep].copy(),
+                        split_np=split_np[keep].copy(),
                     )
                     snapshot_idx += 1
                     progress.n = emitted
@@ -417,6 +459,13 @@ def generate_dataset(
 
                     if emitted >= config.total_images:
                         break
+
+    if emitted < config.total_images:
+        raise RuntimeError(
+            f"Only accepted {emitted} images after simulating "
+            f"{simulated_trajectories} trajectories. Increase max_trajectories, "
+            "lower min_image_std/min_image_range, or use a more active parameter regime."
+        )
 
     if buffer_count > 0:
         path = _save_chunk(
@@ -456,6 +505,9 @@ def generate_dataset(
         "shape": [config.channels == "uv" and 2 or 1, config.grid_size, config.grid_size],
         "value_range": [0.0, 1.0],
         "elapsed_seconds": time.time() - start_time,
+        "simulated_trajectories": simulated_trajectories,
+        "rejected_images": rejected,
+        "accepted_images": emitted,
         "files": [path.name for path in saved_paths],
         "previews": [path.name for path in preview_paths],
     }
