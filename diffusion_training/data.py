@@ -245,18 +245,24 @@ def _download_url(url: str, cache_dir: Path) -> Path:
 
     request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     with urllib.request.urlopen(request) as response:
+        expected_size = int(response.headers.get("Content-Length", 0))
         filename = _filename_from_response(response.headers.get("Content-Disposition")) or Path(
             urllib.parse.urlparse(response.geturl()).path
         ).name
         if not filename:
             filename = "dataset_download"
         target = cache_dir / filename
+        if target.exists() and (expected_size <= 0 or target.stat().st_size == expected_size):
+            print(f"Using cached download: {target}")
+            return target
         with target.open("wb") as handle:
-            while True:
-                chunk = response.read(1024 * 1024)
-                if not chunk:
-                    break
-                handle.write(chunk)
+            with tqdm(total=expected_size or None, unit="B", unit_scale=True, desc=f"Downloading {filename}") as progress:
+                while True:
+                    chunk = response.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    handle.write(chunk)
+                    progress.update(len(chunk))
     return target
 
 
@@ -280,6 +286,8 @@ def _download_yandex_public_folder(public_key: str, cache_dir: Path) -> Path:
         return _extract_if_archive(downloaded, cache_dir)
 
     print(f"Yandex Disk folder contains {len(wanted)} dataset files to check/download")
+    cached = 0
+    downloaded = 0
     for item in tqdm(wanted, desc="Checking Yandex files", unit="file"):
         name = item["name"]
         relative = str(item.get("path", "/" + name)).lstrip("/")
@@ -287,9 +295,12 @@ def _download_yandex_public_folder(public_key: str, cache_dir: Path) -> Path:
         target.parent.mkdir(parents=True, exist_ok=True)
         expected_size = int(item.get("size", 0))
         if target.exists() and (expected_size <= 0 or target.stat().st_size == expected_size):
+            cached += 1
             continue
         file_url = item.get("file") or _resolve_yandex_public_url(public_key, path=item.get("path"))
         _download_direct_file(str(file_url), target, total=expected_size, desc=name)
+        downloaded += 1
+    print(f"Yandex cache ready: cached={cached}, downloaded={downloaded}, dir={target_dir}")
 
     return target_dir
 
