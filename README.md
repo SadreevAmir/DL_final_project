@@ -91,6 +91,13 @@ notebooks/train_diffusion_a100_bf16_colab.ipynb
 Preset оптимизирован под `64x64` Kolmogorov velocity snapshots `[N, 2, 64, 64]`, A100 40GB и bf16.
 Если памяти не хватает, уменьшите `batch_size` до `128` или `base_channels` до `96`.
 
+В Colab notebook процесс разделен на отдельные ячейки:
+
+- `Configure training`: создает `TrainConfig`, ничего не скачивает и не обучает.
+- `Download and load dataset`: скачивает или проверяет cache, грузит train/val в RAM, считает или
+  читает `mean/std`, нормализует данные.
+- `Start training`: запускает обучение модели на уже подготовленном `dataset`.
+
 ## Что генерируется
 
 Gray-Scott system:

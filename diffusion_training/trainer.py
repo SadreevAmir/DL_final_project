@@ -60,11 +60,10 @@ class TrainConfig:
     download_best_in_colab: bool = False
 
 
-def train_diffusion_model(config: TrainConfig) -> Path:
-    _set_reproducibility(config.seed)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    _configure_torch_for_a100()
-
+def prepare_dataset(config: TrainConfig) -> LoadedDataset:
+    print("Preparing dataset")
+    print(f"Data source: {config.data_source}")
+    print(f"Cache directory: {config.cache_dir}")
     dataset = load_dataset_into_ram(
         data_source=config.data_source,
         cache_dir=config.cache_dir,
@@ -76,6 +75,18 @@ def train_diffusion_model(config: TrainConfig) -> Path:
         stats_cache_path=config.stats_cache_path,
         force_recompute_stats=config.force_recompute_stats,
     )
+    print(f"Dataset ready: train={len(dataset.train)}, val={len(dataset.val)}")
+    print(f"Stats: mean={dataset.stats.mean}, std={dataset.stats.std}")
+    return dataset
+
+
+def train_diffusion_model(config: TrainConfig, dataset: LoadedDataset | None = None) -> Path:
+    _set_reproducibility(config.seed)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    _configure_torch_for_a100()
+
+    if dataset is None:
+        dataset = prepare_dataset(config)
 
     run_dir = _make_run_dir(config, dataset)
     (run_dir / "samples").mkdir(parents=True, exist_ok=True)
@@ -125,9 +136,10 @@ def train_diffusion_model(config: TrainConfig) -> Path:
     best_path = run_dir / "checkpoints" / f"best_{run_dir.name}.pt"
     global_step = 0
 
+    print("Starting training")
     print(f"Run directory: {run_dir}")
-    print(f"Loaded dataset into RAM: train={len(dataset.train)}, val={len(dataset.val)}")
-    print(f"Stats: mean={dataset.stats.mean}, std={dataset.stats.std}")
+    print(f"Device: {device}")
+    print(f"Loaded dataset in RAM: train={len(dataset.train)}, val={len(dataset.val)}")
 
     for epoch in range(1, config.epochs + 1):
         train_loss, global_step = _train_one_epoch(

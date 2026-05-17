@@ -13,6 +13,7 @@ from pathlib import Path
 import numpy as np
 import torch
 from torch.utils.data import Dataset
+from tqdm.auto import tqdm
 
 
 @dataclass(frozen=True)
@@ -82,7 +83,8 @@ def load_dataset_into_ram(
     val_parts: list[np.ndarray] = []
     unsplit_parts: list[np.ndarray] = []
 
-    for path in npz_files:
+    print(f"Found {len(npz_files)} NPZ files under {source_path}")
+    for path in tqdm(npz_files, desc="Loading NPZ files into RAM", unit="file"):
         with np.load(path) as arrays:
             if image_key not in arrays:
                 continue
@@ -140,10 +142,9 @@ def load_dataset_into_ram(
         source=data_source,
         stats_cache_path=str(stats_path),
     )
-    print(
-        f"Normalization stats {'loaded from' if stats_loaded_from_cache else 'saved to'} "
-        f"{stats_path}"
-    )
+    print(f"Train images in RAM: {train_images.shape}")
+    print(f"Val images in RAM: {val_images.shape}")
+    print(f"Normalization stats {'loaded from' if stats_loaded_from_cache else 'saved to'} {stats_path}")
 
     return LoadedDataset(
         train=InMemoryImageDataset(train_images),
@@ -278,7 +279,8 @@ def _download_yandex_public_folder(public_key: str, cache_dir: Path) -> Path:
         downloaded = _download_url(public_key, cache_dir)
         return _extract_if_archive(downloaded, cache_dir)
 
-    for item in wanted:
+    print(f"Yandex Disk folder contains {len(wanted)} dataset files to check/download")
+    for item in tqdm(wanted, desc="Checking Yandex files", unit="file"):
         name = item["name"]
         relative = str(item.get("path", "/" + name)).lstrip("/")
         target = target_dir / relative
@@ -287,7 +289,7 @@ def _download_yandex_public_folder(public_key: str, cache_dir: Path) -> Path:
         if target.exists() and (expected_size <= 0 or target.stat().st_size == expected_size):
             continue
         file_url = item.get("file") or _resolve_yandex_public_url(public_key, path=item.get("path"))
-        _download_direct_file(str(file_url), target)
+        _download_direct_file(str(file_url), target, total=expected_size, desc=name)
 
     return target_dir
 
@@ -340,15 +342,19 @@ def _get_yandex_public_resource(
         return json.loads(response.read().decode("utf-8"))
 
 
-def _download_direct_file(url: str, target: Path) -> None:
+def _download_direct_file(url: str, target: Path, total: int = 0, desc: str = "download") -> None:
     request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     with urllib.request.urlopen(request) as response:
+        if total <= 0:
+            total = int(response.headers.get("Content-Length", 0))
         with target.open("wb") as handle:
-            while True:
-                chunk = response.read(1024 * 1024)
-                if not chunk:
-                    break
-                handle.write(chunk)
+            with tqdm(total=total or None, unit="B", unit_scale=True, desc=f"Downloading {desc}") as progress:
+                while True:
+                    chunk = response.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    handle.write(chunk)
+                    progress.update(len(chunk))
 
 
 def _resolve_yandex_public_url(public_key: str, path: str | None = None) -> str:
