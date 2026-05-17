@@ -3,7 +3,7 @@
 from .data import DataStats, LoadedDataset, load_dataset_into_ram
 from .diffusion import GaussianDiffusion
 from .trainer import TrainConfig, prepare_dataset, train_diffusion_model
-from score_training.model import DiffusersUNet
+from .unet import DiffusersUNet
 
 __all__ = [
     "DataStats",

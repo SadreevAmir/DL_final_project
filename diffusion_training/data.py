@@ -98,7 +98,13 @@ def load_dataset_into_ram(
                 if val_mask.any():
                     val_parts.append(images[val_mask])
             else:
-                unsplit_parts.append(images)
+                inferred_split = _infer_split_from_path(path, train_split_name, val_split_name)
+                if inferred_split == train_split_name:
+                    train_parts.append(images)
+                elif inferred_split == val_split_name:
+                    val_parts.append(images)
+                elif inferred_split is None:
+                    unsplit_parts.append(images)
 
     if train_parts:
         train_images = _concat_checked(train_parts, "train")
@@ -171,6 +177,17 @@ def _concat_checked(parts: list[np.ndarray], name: str) -> np.ndarray:
     return np.concatenate(parts, axis=0)
 
 
+def _infer_split_from_path(path: Path, train_split_name: str, val_split_name: str) -> str | None:
+    split_names = {train_split_name, val_split_name, "test"}
+    for part in reversed(path.with_suffix("").parts):
+        name = part.lower()
+        for split_name in split_names:
+            split = split_name.lower()
+            if name == split or name.startswith(f"{split}_"):
+                return split_name if split_name in {train_split_name, val_split_name} else "test"
+    return None
+
+
 def _split_random(images: np.ndarray, val_fraction: float, seed: int) -> tuple[np.ndarray, np.ndarray]:
     if not 0.0 < val_fraction < 0.5:
         raise ValueError("val_fraction must be in (0, 0.5)")
@@ -189,15 +206,21 @@ def _load_or_compute_stats(
     force_recompute: bool,
 ) -> tuple[np.ndarray, np.ndarray, bool]:
     expected_shape = [int(train_images.shape[1]), int(train_images.shape[2]), int(train_images.shape[3])]
+    expected_train_count = int(train_images.shape[0])
     if stats_path.exists() and not force_recompute:
         payload = json.loads(stats_path.read_text())
         cached_shape = payload.get("shape")
-        if cached_shape == expected_shape:
+        cached_train_count = payload.get("train_count")
+        if cached_shape == expected_shape and cached_train_count == expected_train_count:
             mean = np.asarray(payload["mean"], dtype=np.float32)
             std = np.asarray(payload["std"], dtype=np.float32)
             if mean.shape[0] == train_images.shape[1] and std.shape[0] == train_images.shape[1]:
                 return mean, np.maximum(std, 1.0e-6), True
-        print(f"Ignoring incompatible stats cache at {stats_path}: cached_shape={cached_shape}, expected={expected_shape}")
+        print(
+            f"Ignoring incompatible stats cache at {stats_path}: "
+            f"cached_shape={cached_shape}, expected_shape={expected_shape}, "
+            f"cached_train_count={cached_train_count}, expected_train_count={expected_train_count}"
+        )
 
     mean = train_images.mean(axis=(0, 2, 3), dtype=np.float64).astype(np.float32)
     std = train_images.std(axis=(0, 2, 3), dtype=np.float64).astype(np.float32)

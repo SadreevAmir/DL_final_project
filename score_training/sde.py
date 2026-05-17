@@ -63,10 +63,9 @@ class VPCosineSDE(nn.Module):
             pred_noise = model(torch.cat([x, coords_batch], dim=1), t * time_embedding_scale)
             score = -pred_noise / sigma
 
-            # Exponential-integrator / deterministic DDIM update for the VP SDE,
-            # written in the notation of the SDA paper Algorithm 4:
-            # x_{i-1} = mu_{i-1}/mu_i x_i
-            #         + mu_{i-1} * (sigma_{i-1}/mu_{i-1} - sigma_i/mu_i) * sigma_i * score_i
-            x = (mu_next / mu) * x + mu_next * (sigma_next / mu_next - sigma / mu) * sigma * score
+            # Deterministic VP/DDIM update for an epsilon-prediction model.
+            # Since score = -eps/sigma, this is equivalent to:
+            # x_next = mu_next * x0_hat + sigma_next * eps_hat.
+            x = (mu_next / mu) * x - mu_next * (sigma_next / mu_next - sigma / mu) * sigma * score
 
         return x

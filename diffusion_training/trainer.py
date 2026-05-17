@@ -17,7 +17,7 @@ from tqdm.auto import tqdm
 
 from .data import LoadedDataset, load_dataset_into_ram
 from .diffusion import GaussianDiffusion
-from score_training.model import DiffusersUNet
+from .unet import DiffusersUNet
 
 
 @dataclass

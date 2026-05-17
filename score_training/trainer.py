@@ -17,7 +17,7 @@ from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
 from diffusion_training.data import LoadedDataset, load_dataset_into_ram
-from .model import DiffusersUNet
+from diffusion_training.unet import DiffusersUNet
 from .sde import VPCosineSDE
 
 
