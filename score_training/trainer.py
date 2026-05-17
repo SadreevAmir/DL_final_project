@@ -53,7 +53,7 @@ class ScoreTrainConfig:
     coordinate_mode: str = "fourier"
     random_periodic_shift: bool = True
     time_embedding_scale: float = 999.0
-    min_snr_gamma: float = 5.0
+    min_snr_gamma: float = 0.0
     clip_pred_x0: float = 0.0
     precision: str = "bf16"
     sampling_precision: str = "fp32"

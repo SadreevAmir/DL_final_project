@@ -43,7 +43,7 @@ class TrainConfig:
     beta_schedule: str = "cosine"
     alpha_cumprod_min: float = 1.0e-4
     clip_pred_x0: float = 0.0
-    min_snr_gamma: float = 5.0
+    min_snr_gamma: float = 0.0
     sample_steps: int = 250
     sample_count: int = 32
     sample_every_epochs: int = 1
