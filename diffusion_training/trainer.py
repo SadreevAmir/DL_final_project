@@ -42,7 +42,8 @@ class TrainConfig:
     timesteps: int = 1_000
     beta_schedule: str = "cosine"
     alpha_cumprod_min: float = 1.0e-4
-    clip_pred_x0: float = 5.0
+    clip_pred_x0: float = 0.0
+    min_snr_gamma: float = 5.0
     sample_steps: int = 250
     sample_count: int = 32
     sample_every_epochs: int = 1
@@ -53,10 +54,10 @@ class TrainConfig:
     num_res_blocks: int = 3
     attention_head_dim: int = 32
     dropout: float = 0.0
-    padding_mode: str = "zeros"
+    padding_mode: str = "circular"
     coordinate_mode: str = "fourier"
     random_periodic_shift: bool = True
-    ema_decay: float = 0.999
+    ema_decay: float = 0.9997
     precision: str = "bf16"
     sampling_precision: str = "fp32"
     compile_model: bool = False
@@ -64,8 +65,9 @@ class TrainConfig:
     max_val_batches: int = 0
     limit_train: int = 0
     limit_val: int = 0
-    save_last_every_epochs: int = 1
-    download_best_in_colab: bool = False
+    save_last_every_epochs: int = 10
+    download_best_in_colab: bool = True
+    download_periodic_in_colab: bool = True
 
 
 def prepare_dataset(config: TrainConfig) -> LoadedDataset:
@@ -215,8 +217,9 @@ def train_diffusion_model(config: TrainConfig, dataset: LoadedDataset | None = N
 
         should_save_last = config.save_last_every_epochs > 0 and epoch % config.save_last_every_epochs == 0
         if should_save_last:
+            periodic_path = run_dir / "checkpoints" / f"last_{run_dir.name}_epoch_{epoch:04d}.pt"
             _save_checkpoint(
-                run_dir / "checkpoints" / f"last_{run_dir.name}_epoch_{epoch:04d}.pt",
+                periodic_path,
                 model,
                 ema_model,
                 optimizer,
@@ -227,6 +230,8 @@ def train_diffusion_model(config: TrainConfig, dataset: LoadedDataset | None = N
                 best_val,
                 history,
             )
+            if config.download_periodic_in_colab:
+                _download_in_colab(periodic_path)
 
         if improved:
             epoch_best_path = run_dir / "checkpoints" / f"best_{run_dir.name}_epoch_{epoch:04d}_val_{val_loss:.6f}.pt"
@@ -279,7 +284,7 @@ def _train_one_epoch(
         batch = batch.to(device, non_blocking=True)
         batch, batch_coords = _maybe_roll_periodic(batch, coords, enabled=config.random_periodic_shift)
         with _autocast_context(device, config.precision):
-            loss = diffusion.training_loss(model, batch, coords=batch_coords) / config.grad_accum_steps
+            loss = diffusion.training_loss(model, batch, coords=batch_coords, min_snr_gamma=config.min_snr_gamma) / config.grad_accum_steps
         scaler.scale(loss).backward()
         pending_backward = True
 
@@ -316,7 +321,7 @@ def _validate(
             break
         batch = batch.to(device, non_blocking=True)
         with _autocast_context(device, config.precision):
-            loss = diffusion.training_loss(model, batch, coords=coords)
+            loss = diffusion.training_loss(model, batch, coords=coords, min_snr_gamma=config.min_snr_gamma)
         losses.append(float(loss.detach().item()))
     return float(np.mean(losses))
 
@@ -565,5 +570,6 @@ def _set_reproducibility(seed: int) -> None:
 def _configure_torch_for_a100() -> None:
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
+    torch.backends.cudnn.benchmark = True
     if hasattr(torch, "set_float32_matmul_precision"):
         torch.set_float32_matmul_precision("high")

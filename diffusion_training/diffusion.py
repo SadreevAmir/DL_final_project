@@ -47,7 +47,13 @@ class GaussianDiffusion(nn.Module):
             + _extract(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape) * noise
         )
 
-    def training_loss(self, model: nn.Module, x_start: torch.Tensor, coords: torch.Tensor | None = None) -> torch.Tensor:
+    def training_loss(
+        self,
+        model: nn.Module,
+        x_start: torch.Tensor,
+        coords: torch.Tensor | None = None,
+        min_snr_gamma: float = 5.0,
+    ) -> torch.Tensor:
         batch = x_start.shape[0]
         t = torch.randint(0, self.timesteps, (batch,), device=x_start.device, dtype=torch.long)
         noise = torch.randn_like(x_start)
@@ -55,6 +61,14 @@ class GaussianDiffusion(nn.Module):
         if coords is not None:
             x_noisy = torch.cat([x_noisy, coords.expand(batch, -1, -1, -1)], dim=1)
         predicted_noise = model(x_noisy, t)
+        if min_snr_gamma > 0:
+            alpha_bar = self.alphas_cumprod[t].view(-1, *([1] * (x_start.ndim - 1)))
+            snr = alpha_bar / (1.0 - alpha_bar)
+            weight = torch.minimum(snr, snr.new_full((), float(min_snr_gamma))) / snr
+            per_sample = ((predicted_noise.float() - noise.float()) ** 2).mean(
+                dim=tuple(range(1, x_start.ndim)), keepdim=True
+            )
+            return (per_sample * weight).mean()
         return F.mse_loss(predicted_noise.float(), noise.float())
 
     @torch.no_grad()

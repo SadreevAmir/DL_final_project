@@ -49,21 +49,23 @@ class ScoreTrainConfig:
     num_res_blocks: int = 3
     attention_head_dim: int = 32
     dropout: float = 0.0
-    padding_mode: str = "zeros"
+    padding_mode: str = "circular"
     coordinate_mode: str = "fourier"
     random_periodic_shift: bool = True
     time_embedding_scale: float = 999.0
-    clip_pred_x0: float = 5.0
+    min_snr_gamma: float = 5.0
+    clip_pred_x0: float = 0.0
     precision: str = "bf16"
     sampling_precision: str = "fp32"
-    ema_decay: float = 0.999
+    ema_decay: float = 0.9997
     use_ema_for_validation: bool = True
     use_ema_for_sampling: bool = True
     compile_model: bool = False
     limit_train: int = 0
     limit_val: int = 0
     save_last_every_epochs: int = 10
-    download_best_in_colab: bool = False
+    download_best_in_colab: bool = True
+    download_periodic_in_colab: bool = True
 
 
 def prepare_score_dataset(config: ScoreTrainConfig) -> LoadedDataset:
@@ -203,7 +205,10 @@ def train_score_model(config: ScoreTrainConfig, dataset: LoadedDataset | None = 
         _write_json(run_dir / "history.json", {"history": history})
 
         if config.save_last_every_epochs > 0 and epoch % config.save_last_every_epochs == 0:
-            _save_checkpoint(run_dir / "checkpoints" / f"last_{run_dir.name}_epoch_{epoch:04d}.pt", model, ema_model, optimizer, config, dataset, epoch, global_step, best_val, history)
+            periodic_path = run_dir / "checkpoints" / f"last_{run_dir.name}_epoch_{epoch:04d}.pt"
+            _save_checkpoint(periodic_path, model, ema_model, optimizer, config, dataset, epoch, global_step, best_val, history)
+            if config.download_periodic_in_colab:
+                _download_in_colab(periodic_path)
 
         if improved:
             epoch_best_path = run_dir / "checkpoints" / f"best_{run_dir.name}_epoch_{epoch:04d}_val_{val_loss:.6f}.pt"
@@ -243,7 +248,13 @@ def _train_epoch(
         batch, batch_coords = _maybe_roll_periodic(batch, coords, enabled=config.random_periodic_shift)
         optimizer.zero_grad(set_to_none=True)
         with _autocast_context(device, config.precision):
-            loss = sde.training_loss(model, batch, batch_coords, time_embedding_scale=config.time_embedding_scale)
+            loss = sde.training_loss(
+                model,
+                batch,
+                batch_coords,
+                time_embedding_scale=config.time_embedding_scale,
+                min_snr_gamma=config.min_snr_gamma,
+            )
         scaler.scale(loss).backward()
         scaler.unscale_(optimizer)
         if config.max_grad_norm > 0:
@@ -275,7 +286,13 @@ def _validate(
             break
         batch = batch.to(device, non_blocking=True)
         with _autocast_context(device, config.precision):
-            loss = sde.training_loss(model, batch, coords, time_embedding_scale=config.time_embedding_scale)
+            loss = sde.training_loss(
+                model,
+                batch,
+                coords,
+                time_embedding_scale=config.time_embedding_scale,
+                min_snr_gamma=config.min_snr_gamma,
+            )
         losses.append(float(loss.detach().item()))
     return float(np.mean(losses))
 
@@ -493,5 +510,6 @@ def _set_reproducibility(seed: int) -> None:
 def _configure_torch_for_a100() -> None:
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
+    torch.backends.cudnn.benchmark = True
     if hasattr(torch, "set_float32_matmul_precision"):
         torch.set_float32_matmul_precision("high")

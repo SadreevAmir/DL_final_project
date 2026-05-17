@@ -21,7 +21,7 @@ class DiffusersUNet(nn.Module):
         image_size: int = 64,
         dropout: float = 0.0,
         attention_head_dim: int = 32,
-        padding_mode: str = "zeros",
+        padding_mode: str = "circular",
     ) -> None:
         super().__init__()
         try:
