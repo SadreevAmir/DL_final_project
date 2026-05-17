@@ -17,7 +17,7 @@ from tqdm.auto import tqdm
 
 from .data import LoadedDataset, load_dataset_into_ram
 from .diffusion import GaussianDiffusion
-from .model import UNet
+from score_training.model import ScoreUNet
 
 
 @dataclass
@@ -33,7 +33,7 @@ class TrainConfig:
     seed: int = 123
     epochs: int = 100
     batch_size: int = 256
-    val_batch_size: int = 256
+    val_batch_size: int = 128
     num_workers: int = 4
     lr: float = 2.0e-4
     weight_decay: float = 1.0e-4
@@ -47,10 +47,8 @@ class TrainConfig:
     display_samples_in_notebook: bool = False
     use_ema_for_validation: bool = False
     use_ema_for_sampling: bool = False
-    base_channels: int = 128
-    channel_mults: str = "1,2,4,4"
-    num_res_blocks: int = 2
-    attention_resolutions: str = "16"
+    channels_per_level: str = "96,192,384"
+    num_res_blocks: int = 3
     dropout: float = 0.0
     ema_decay: float = 0.9999
     precision: str = "bf16"
@@ -101,21 +99,20 @@ def train_diffusion_model(config: TrainConfig, dataset: LoadedDataset | None = N
     train_loader = _make_loader(dataset.train, config.batch_size, config.num_workers, shuffle=True)
     val_loader = _make_loader(dataset.val, config.val_batch_size, config.num_workers, shuffle=False)
 
-    model = UNet(
-        in_channels=dataset.stats.channels,
-        base_channels=config.base_channels,
-        channel_mults=_parse_int_tuple(config.channel_mults),
+    coords = _make_coord_grid(dataset.stats.height, dataset.stats.width, device)
+    model = ScoreUNet(
+        in_channels=dataset.stats.channels + 2,
+        out_channels=dataset.stats.channels,
+        channels_per_level=_parse_int_tuple(config.channels_per_level),
         num_res_blocks=config.num_res_blocks,
-        attention_resolutions=_parse_int_tuple(config.attention_resolutions),
         image_size=dataset.stats.height,
         dropout=config.dropout,
     ).to(device)
-    ema_model = UNet(
-        in_channels=dataset.stats.channels,
-        base_channels=config.base_channels,
-        channel_mults=_parse_int_tuple(config.channel_mults),
+    ema_model = ScoreUNet(
+        in_channels=dataset.stats.channels + 2,
+        out_channels=dataset.stats.channels,
+        channels_per_level=_parse_int_tuple(config.channels_per_level),
         num_res_blocks=config.num_res_blocks,
-        attention_resolutions=_parse_int_tuple(config.attention_resolutions),
         image_size=dataset.stats.height,
         dropout=config.dropout,
     ).to(device)
@@ -153,6 +150,7 @@ def train_diffusion_model(config: TrainConfig, dataset: LoadedDataset | None = N
             optimizer=optimizer,
             scaler=scaler,
             device=device,
+            coords=coords,
             config=config,
             global_step=global_step,
             epoch=epoch,
@@ -165,6 +163,7 @@ def train_diffusion_model(config: TrainConfig, dataset: LoadedDataset | None = N
             diffusion=diffusion,
             loader=val_loader,
             device=device,
+            coords=coords,
             config=config,
             epoch=epoch,
         )
@@ -180,6 +179,7 @@ def train_diffusion_model(config: TrainConfig, dataset: LoadedDataset | None = N
                 diffusion=diffusion,
                 dataset=dataset,
                 device=device,
+                coords=coords,
                 config=config,
                 path=sample_path,
             )
@@ -247,6 +247,7 @@ def _train_one_epoch(
     optimizer: AdamW,
     scaler: torch.amp.GradScaler,
     device: torch.device,
+    coords: torch.Tensor,
     config: TrainConfig,
     global_step: int,
     epoch: int,
@@ -262,7 +263,7 @@ def _train_one_epoch(
             break
         batch = batch.to(device, non_blocking=True)
         with _autocast_context(device, config.precision):
-            loss = diffusion.training_loss(model, batch) / config.grad_accum_steps
+            loss = diffusion.training_loss(model, batch, coords=coords) / config.grad_accum_steps
         scaler.scale(loss).backward()
         pending_backward = True
 
@@ -288,6 +289,7 @@ def _validate(
     diffusion: GaussianDiffusion,
     loader: DataLoader[torch.Tensor],
     device: torch.device,
+    coords: torch.Tensor,
     config: TrainConfig,
     epoch: int,
 ) -> float:
@@ -298,7 +300,7 @@ def _validate(
             break
         batch = batch.to(device, non_blocking=True)
         with _autocast_context(device, config.precision):
-            loss = diffusion.training_loss(model, batch)
+            loss = diffusion.training_loss(model, batch, coords=coords)
         losses.append(float(loss.detach().item()))
     return float(np.mean(losses))
 
@@ -309,6 +311,7 @@ def _save_samples(
     diffusion: GaussianDiffusion,
     dataset: LoadedDataset,
     device: torch.device,
+    coords: torch.Tensor,
     config: TrainConfig,
     path: Path,
 ) -> None:
@@ -320,7 +323,7 @@ def _save_samples(
         dataset.stats.width,
     )
     with _autocast_context(device, config.precision):
-        samples = diffusion.sample(model, shape, device=device, sample_steps=config.sample_steps)
+        samples = diffusion.sample(model, shape, device=device, sample_steps=config.sample_steps, coords=coords)
     samples = samples.float().cpu().numpy()
     mean = np.asarray(dataset.stats.mean, dtype=np.float32).reshape(1, -1, 1, 1)
     std = np.asarray(dataset.stats.std, dtype=np.float32).reshape(1, -1, 1, 1)
@@ -398,6 +401,13 @@ def _make_loader(dataset, batch_size: int, num_workers: int, shuffle: bool) -> D
     )
 
 
+def _make_coord_grid(height: int, width: int, device: torch.device) -> torch.Tensor:
+    y = torch.linspace(-1.0, 1.0, height, device=device)
+    x = torch.linspace(-1.0, 1.0, width, device=device)
+    yy, xx = torch.meshgrid(y, x, indexing="ij")
+    return torch.stack((xx, yy), dim=0).unsqueeze(0)
+
+
 def _optimizer_step(
     model: nn.Module,
     ema_model: nn.Module,
@@ -418,7 +428,7 @@ def _make_run_dir(config: TrainConfig, dataset: LoadedDataset) -> Path:
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     name = (
         f"ddpm_{config.dataset_tag}_{dataset.stats.channels}ch_"
-        f"{dataset.stats.height}x{dataset.stats.width}_{config.precision}_{timestamp}"
+        f"{dataset.stats.height}x{dataset.stats.width}_coords_{config.precision}_{timestamp}"
     )
     path = Path(config.output_dir) / name
     path.mkdir(parents=True, exist_ok=False)

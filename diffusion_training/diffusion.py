@@ -45,11 +45,13 @@ class GaussianDiffusion(nn.Module):
             + _extract(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape) * noise
         )
 
-    def training_loss(self, model: nn.Module, x_start: torch.Tensor) -> torch.Tensor:
+    def training_loss(self, model: nn.Module, x_start: torch.Tensor, coords: torch.Tensor | None = None) -> torch.Tensor:
         batch = x_start.shape[0]
         t = torch.randint(0, self.timesteps, (batch,), device=x_start.device, dtype=torch.long)
         noise = torch.randn_like(x_start)
         x_noisy = self.q_sample(x_start, t, noise)
+        if coords is not None:
+            x_noisy = torch.cat([x_noisy, coords.expand(batch, -1, -1, -1)], dim=1)
         predicted_noise = model(x_noisy, t)
         return F.mse_loss(predicted_noise.float(), noise.float())
 
@@ -60,23 +62,32 @@ class GaussianDiffusion(nn.Module):
         shape: tuple[int, int, int, int],
         device: torch.device,
         sample_steps: int | None = None,
+        coords: torch.Tensor | None = None,
     ) -> torch.Tensor:
         if sample_steps is not None and sample_steps != self.timesteps:
-            return self.ddim_sample(model, shape, device, sample_steps)
+            return self.ddim_sample(model, shape, device, sample_steps, coords=coords)
 
         image = torch.randn(shape, device=device)
         for i in reversed(range(self.timesteps)):
             t = torch.full((shape[0],), i, device=device, dtype=torch.long)
-            image = self.p_sample(model, image, t, i)
+            image = self.p_sample(model, image, t, i, coords=coords)
         return image
 
     @torch.no_grad()
-    def p_sample(self, model: nn.Module, x: torch.Tensor, t: torch.Tensor, t_index: int) -> torch.Tensor:
+    def p_sample(
+        self,
+        model: nn.Module,
+        x: torch.Tensor,
+        t: torch.Tensor,
+        t_index: int,
+        coords: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         betas_t = _extract(self.betas, t, x.shape)
         sqrt_one_minus_alphas_cumprod_t = _extract(self.sqrt_one_minus_alphas_cumprod, t, x.shape)
         sqrt_recip_alphas_t = _extract(self.sqrt_recip_alphas, t, x.shape)
 
-        model_mean = sqrt_recip_alphas_t * (x - betas_t * model(x, t) / sqrt_one_minus_alphas_cumprod_t)
+        model_input = x if coords is None else torch.cat([x, coords.expand(x.shape[0], -1, -1, -1)], dim=1)
+        model_mean = sqrt_recip_alphas_t * (x - betas_t * model(model_input, t) / sqrt_one_minus_alphas_cumprod_t)
         if t_index == 0:
             return model_mean
         posterior_variance_t = _extract(self.posterior_variance, t, x.shape)
@@ -90,6 +101,7 @@ class GaussianDiffusion(nn.Module):
         device: torch.device,
         sample_steps: int,
         eta: float = 0.0,
+        coords: torch.Tensor | None = None,
     ) -> torch.Tensor:
         times = torch.linspace(-1, self.timesteps - 1, steps=sample_steps + 1, device=device).long()
         times = list(reversed(times.tolist()))
@@ -97,7 +109,8 @@ class GaussianDiffusion(nn.Module):
 
         for time, next_time in zip(times[:-1], times[1:]):
             t = torch.full((shape[0],), time, device=device, dtype=torch.long)
-            pred_noise = model(image, t)
+            model_input = image if coords is None else torch.cat([image, coords.expand(shape[0], -1, -1, -1)], dim=1)
+            pred_noise = model(model_input, t)
             alpha = self.alphas_cumprod[time]
             alpha_next = self.alphas_cumprod[next_time] if next_time >= 0 else torch.tensor(1.0, device=device)
             pred_x0 = (image - torch.sqrt(1.0 - alpha) * pred_noise) / torch.sqrt(alpha)

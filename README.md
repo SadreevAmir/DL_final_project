@@ -44,6 +44,12 @@ notebooks/train_diffusion_a100_bf16_colab.ipynb
 optimizer state, config, dataset stats и history. Если validation loss улучшился, сохраняется
 `best_*.pt`; в Colab notebook этот файл дополнительно скачивается через `files.download`.
 
+DDPM baseline и score-based baseline используют одинаковую U-Net конфигурацию и batch size:
+U-Net channels `(96, 192, 384)`, `3` residual blocks per level, circular padding,
+LayerNorm-style normalization, SiLU, batch size `128`. В обоих вариантах к входу модели
+добавляются clean coordinate channels `(x, y)` в диапазоне `[-1, 1]`; они никогда не шумятся и не
+входят в loss.
+
 `--data-source` может быть:
 
 - публичной ссылкой Yandex Disk на `.zip`, `.npz` или папку;
@@ -71,12 +77,11 @@ python3 scripts/train_diffusion.py \
   --stats-cache-path data/download_cache/kolmogorov_velocity_256_to_64_train_stats.json \
   --dataset-tag kolmogorov_velocity_256_to_64 \
   --epochs 100 \
-  --batch-size 256 \
-  --val-batch-size 256 \
+  --batch-size 128 \
+  --val-batch-size 128 \
   --precision bf16 \
-  --base-channels 128 \
-  --channel-mults 1,2,4,4 \
-  --attention-resolutions 16 \
+  --channels-per-level 96,192,384 \
+  --num-res-blocks 3 \
   --sample-every-epochs 1 \
   --sample-steps 250
 ```
@@ -89,7 +94,7 @@ notebooks/train_diffusion_a100_bf16_colab.ipynb
 
 В notebook нужно указать `DATA_SOURCE` как публичную ссылку Yandex Disk или путь к архиву/папке.
 Preset оптимизирован под `64x64` Kolmogorov velocity snapshots `[N, 2, 64, 64]`, A100 40GB и bf16.
-Если памяти не хватает, уменьшите `batch_size` до `128` или `base_channels` до `96`.
+Если памяти не хватает, уменьшите `batch_size` до `64`.
 
 В Colab notebook процесс разделен на отдельные ячейки:
 
@@ -117,7 +122,8 @@ sigma(t) = sqrt(1 - mu(t)^2)
 `[-1, 1]`. Они подаются всегда без шума и не входят в loss; модель предсказывает epsilon только
 для физических каналов. Default architecture ближе к Kolmogorov setup из Appendix D: U-Net,
 channels `(96, 192, 384)`, `3` residual blocks per level, circular padding, SiLU, LayerNorm-style
-normalization, AdamW, weight decay `1e-3`, linear LR decay, `256` sampling steps.
+normalization, AdamW, weight decay `1e-3`, linear LR decay, `256` sampling steps. Эпоха в этом
+варианте теперь означает полный проход по train loader; `batches_per_epoch=0` и `val_batches=0`.
 
 CLI:
 
@@ -127,8 +133,8 @@ python3 scripts/train_score_vp_coords.py \
   --stats-cache-path data/download_cache/kolmogorov_velocity_256_to_64_train_stats.json \
   --dataset-tag kolmogorov_velocity_256_to_64_coords \
   --epochs 1024 \
-  --batches-per-epoch 128 \
-  --batch-size 32 \
+  --batches-per-epoch 0 \
+  --batch-size 128 \
   --precision bf16
 ```
 

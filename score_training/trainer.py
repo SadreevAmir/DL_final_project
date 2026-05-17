@@ -33,10 +33,10 @@ class ScoreTrainConfig:
     val_fraction: float = 0.1
     seed: int = 123
     epochs: int = 1024
-    batches_per_epoch: int = 128
-    val_batches: int = 64
-    batch_size: int = 32
-    val_batch_size: int = 64
+    batches_per_epoch: int = 0
+    val_batches: int = 0
+    batch_size: int = 128
+    val_batch_size: int = 128
     num_workers: int = 4
     lr: float = 2.0e-4
     weight_decay: float = 1.0e-3
