@@ -98,6 +98,40 @@ Preset оптимизирован под `64x64` Kolmogorov velocity snapshots `
   читает `mean/std`, нормализует данные.
 - `Start training`: запускает обучение модели на уже подготовленном `dataset`.
 
+Отдельный score-based VP SDE вариант с clean coordinate channels:
+
+```text
+score_training/
+scripts/train_score_vp_coords.py
+notebooks/train_score_vp_coords_a100_bf16_colab.ipynb
+```
+
+В этом варианте физические velocity channels шумятся по VP SDE из статьи:
+
+```text
+mu(t) = cos(arccos(1e-3) * t)
+sigma(t) = sqrt(1 - mu(t)^2)
+```
+
+К входу U-Net на каждом timestep добавляются два координатных канала `(x, y)` в диапазоне
+`[-1, 1]`. Они подаются всегда без шума и не входят в loss; модель предсказывает epsilon только
+для физических каналов. Default architecture ближе к Kolmogorov setup из Appendix D: U-Net,
+channels `(96, 192, 384)`, `3` residual blocks per level, circular padding, SiLU, LayerNorm-style
+normalization, AdamW, weight decay `1e-3`, linear LR decay, `256` sampling steps.
+
+CLI:
+
+```bash
+python3 scripts/train_score_vp_coords.py \
+  --data-source https://disk.yandex.ru/d/rrjDGzzX5cfFnA \
+  --stats-cache-path data/download_cache/kolmogorov_velocity_256_to_64_train_stats.json \
+  --dataset-tag kolmogorov_velocity_256_to_64_coords \
+  --epochs 1024 \
+  --batches-per-epoch 128 \
+  --batch-size 32 \
+  --precision bf16
+```
+
 ## Что генерируется
 
 Gray-Scott system:
