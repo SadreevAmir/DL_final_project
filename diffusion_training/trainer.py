@@ -17,7 +17,7 @@ from tqdm.auto import tqdm
 
 from .data import LoadedDataset, load_dataset_into_ram
 from .diffusion import GaussianDiffusion
-from score_training.model import ScoreUNet
+from score_training.model import DiffusersUNet
 
 
 @dataclass
@@ -32,7 +32,7 @@ class TrainConfig:
     val_fraction: float = 0.1
     seed: int = 123
     epochs: int = 100
-    batch_size: int = 256
+    batch_size: int = 128
     val_batch_size: int = 128
     num_workers: int = 4
     lr: float = 2.0e-4
@@ -49,6 +49,7 @@ class TrainConfig:
     use_ema_for_sampling: bool = False
     channels_per_level: str = "96,192,384"
     num_res_blocks: int = 3
+    attention_head_dim: int = 32
     dropout: float = 0.0
     ema_decay: float = 0.9999
     precision: str = "bf16"
@@ -100,21 +101,23 @@ def train_diffusion_model(config: TrainConfig, dataset: LoadedDataset | None = N
     val_loader = _make_loader(dataset.val, config.val_batch_size, config.num_workers, shuffle=False)
 
     coords = _make_coord_grid(dataset.stats.height, dataset.stats.width, device)
-    model = ScoreUNet(
+    model = DiffusersUNet(
         in_channels=dataset.stats.channels + 2,
         out_channels=dataset.stats.channels,
         channels_per_level=_parse_int_tuple(config.channels_per_level),
         num_res_blocks=config.num_res_blocks,
         image_size=dataset.stats.height,
         dropout=config.dropout,
+        attention_head_dim=config.attention_head_dim,
     ).to(device)
-    ema_model = ScoreUNet(
+    ema_model = DiffusersUNet(
         in_channels=dataset.stats.channels + 2,
         out_channels=dataset.stats.channels,
         channels_per_level=_parse_int_tuple(config.channels_per_level),
         num_res_blocks=config.num_res_blocks,
         image_size=dataset.stats.height,
         dropout=config.dropout,
+        attention_head_dim=config.attention_head_dim,
     ).to(device)
     ema_model.load_state_dict(model.state_dict())
     ema_model.eval()
@@ -140,6 +143,8 @@ def train_diffusion_model(config: TrainConfig, dataset: LoadedDataset | None = N
     print(f"Run directory: {run_dir}")
     print(f"Device: {device}")
     print(f"Loaded dataset in RAM: train={len(dataset.train)}, val={len(dataset.val)}")
+    print("Model: diffusers.UNet2DModel")
+    print("Timestep scale: DDPM integer timesteps 0..999 are passed directly to diffusers.")
 
     for epoch in range(1, config.epochs + 1):
         train_loss, global_step = _train_one_epoch(

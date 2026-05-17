@@ -44,11 +44,11 @@ notebooks/train_diffusion_a100_bf16_colab.ipynb
 optimizer state, config, dataset stats и history. Если validation loss улучшился, сохраняется
 `best_*.pt`; в Colab notebook этот файл дополнительно скачивается через `files.download`.
 
-DDPM baseline и score-based baseline используют одинаковую U-Net конфигурацию и batch size:
-U-Net channels `(96, 192, 384)`, `3` residual blocks per level, circular padding,
-LayerNorm-style normalization, SiLU, batch size `128`. В обоих вариантах к входу модели
-добавляются clean coordinate channels `(x, y)` в диапазоне `[-1, 1]`; они никогда не шумятся и не
-входят в loss.
+DDPM baseline и score-based baseline используют одинаковую модель и batch size:
+`diffusers.UNet2DModel` с channels `(96, 192, 384)`, `3` residual blocks per level,
+attention на нижних разрешениях, `attention_head_dim=32`, SiLU, batch size `128`. В обоих
+вариантах к входу модели добавляются clean coordinate channels `(x, y)` в диапазоне `[-1, 1]`;
+они никогда не шумятся и не входят в loss.
 
 `--data-source` может быть:
 
@@ -82,6 +82,7 @@ python3 scripts/train_diffusion.py \
   --precision bf16 \
   --channels-per-level 96,192,384 \
   --num-res-blocks 3 \
+  --attention-head-dim 32 \
   --sample-every-epochs 1 \
   --sample-steps 250
 ```
@@ -118,11 +119,12 @@ mu(t) = cos(arccos(1e-3) * t)
 sigma(t) = sqrt(1 - mu(t)^2)
 ```
 
-К входу U-Net на каждом timestep добавляются два координатных канала `(x, y)` в диапазоне
+К входу `diffusers.UNet2DModel` на каждом timestep добавляются два координатных канала `(x, y)` в диапазоне
 `[-1, 1]`. Они подаются всегда без шума и не входят в loss; модель предсказывает epsilon только
-для физических каналов. Default architecture ближе к Kolmogorov setup из Appendix D: U-Net,
-channels `(96, 192, 384)`, `3` residual blocks per level, circular padding, SiLU, LayerNorm-style
-normalization, AdamW, weight decay `1e-3`, linear LR decay, `256` sampling steps. Эпоха в этом
+для физических каналов. Архитектура совпадает с DDPM вариантом: channels `(96, 192, 384)`,
+`3` residual blocks per level, attention на нижних разрешениях, AdamW, weight decay `1e-3`,
+linear LR decay, `256` sampling steps. Непрерывное VP-SDE время `t in [0, 1]` передается в
+diffusers как `t * 999`, то есть в том же масштабе timestep, что DDPM `0..999`. Эпоха в этом
 варианте теперь означает полный проход по train loader; `batches_per_epoch=0` и `val_batches=0`.
 
 CLI:
@@ -135,7 +137,8 @@ python3 scripts/train_score_vp_coords.py \
   --epochs 1024 \
   --batches-per-epoch 0 \
   --batch-size 128 \
-  --precision bf16
+  --precision bf16 \
+  --time-embedding-scale 999
 ```
 
 ## Что генерируется

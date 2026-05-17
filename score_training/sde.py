@@ -30,7 +30,7 @@ class VPCosineSDE(nn.Module):
         model: nn.Module,
         x0: torch.Tensor,
         coords: torch.Tensor,
-        time_embedding_scale: float = 1_000.0,
+        time_embedding_scale: float = 999.0,
     ) -> torch.Tensor:
         batch = x0.shape[0]
         t = self.t_eps + (1.0 - self.t_eps) * torch.rand(batch, device=x0.device)
@@ -49,7 +49,7 @@ class VPCosineSDE(nn.Module):
         coords: torch.Tensor,
         steps: int,
         device: torch.device,
-        time_embedding_scale: float = 1_000.0,
+        time_embedding_scale: float = 999.0,
     ) -> torch.Tensor:
         x = torch.randn(shape, device=device)
         times = torch.linspace(1.0, 0.0, steps + 1, device=device)

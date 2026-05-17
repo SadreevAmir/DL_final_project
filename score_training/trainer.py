@@ -17,7 +17,7 @@ from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
 from diffusion_training.data import LoadedDataset, load_dataset_into_ram
-from .model import ScoreUNet
+from .model import DiffusersUNet
 from .sde import VPCosineSDE
 
 
@@ -47,7 +47,9 @@ class ScoreTrainConfig:
     display_samples_in_notebook: bool = True
     channels_per_level: str = "96,192,384"
     num_res_blocks: int = 3
+    attention_head_dim: int = 32
     dropout: float = 0.0
+    time_embedding_scale: float = 999.0
     precision: str = "bf16"
     compile_model: bool = False
     limit_train: int = 0
@@ -90,13 +92,14 @@ def train_score_model(config: ScoreTrainConfig, dataset: LoadedDataset | None = 
 
     coords = _make_coord_grid(dataset.stats.height, dataset.stats.width, device)
     data_channels = dataset.stats.channels
-    model = ScoreUNet(
+    model = DiffusersUNet(
         in_channels=data_channels + 2,
         out_channels=data_channels,
         channels_per_level=_parse_int_tuple(config.channels_per_level),
         num_res_blocks=config.num_res_blocks,
         image_size=dataset.stats.height,
         dropout=config.dropout,
+        attention_head_dim=config.attention_head_dim,
     ).to(device)
     if config.compile_model and hasattr(torch, "compile"):
         model = torch.compile(model)
@@ -131,6 +134,8 @@ def train_score_model(config: ScoreTrainConfig, dataset: LoadedDataset | None = 
     print("Starting score-based VP SDE training")
     print(f"Run directory: {run_dir}")
     print(f"Model input channels: {data_channels} noisy data + 2 clean coordinate channels")
+    print("Model: diffusers.UNet2DModel")
+    print(f"Timestep scale: continuous VP-SDE t in [0, 1] is passed as t * {config.time_embedding_scale:g}.")
 
     for epoch in range(1, config.epochs + 1):
         train_loss, global_step = _train_epoch(
@@ -209,7 +214,7 @@ def _train_epoch(
         batch = batch.to(device, non_blocking=True)
         optimizer.zero_grad(set_to_none=True)
         with _autocast_context(device, config.precision):
-            loss = sde.training_loss(model, batch, coords)
+            loss = sde.training_loss(model, batch, coords, time_embedding_scale=config.time_embedding_scale)
         scaler.scale(loss).backward()
         scaler.unscale_(optimizer)
         if config.max_grad_norm > 0:
@@ -240,7 +245,7 @@ def _validate(
             break
         batch = batch.to(device, non_blocking=True)
         with _autocast_context(device, config.precision):
-            loss = sde.training_loss(model, batch, coords)
+            loss = sde.training_loss(model, batch, coords, time_embedding_scale=config.time_embedding_scale)
         losses.append(float(loss.detach().item()))
     return float(np.mean(losses))
 
@@ -257,7 +262,14 @@ def _save_samples(
 ) -> None:
     shape = (config.sample_count, dataset.stats.channels, dataset.stats.height, dataset.stats.width)
     with _autocast_context(device, config.precision):
-        samples = sde.sample(model, shape, coords, steps=config.sample_steps, device=device)
+        samples = sde.sample(
+            model,
+            shape,
+            coords,
+            steps=config.sample_steps,
+            device=device,
+            time_embedding_scale=config.time_embedding_scale,
+        )
     samples_np = samples.float().cpu().numpy()
     mean = np.asarray(dataset.stats.mean, dtype=np.float32).reshape(1, -1, 1, 1)
     std = np.asarray(dataset.stats.std, dtype=np.float32).reshape(1, -1, 1, 1)
@@ -323,6 +335,7 @@ def _save_checkpoint(
             "history": history,
             "coordinate_channels": ["x", "y"],
             "coordinate_range": [-1.0, 1.0],
+            "time_embedding_scale": config.time_embedding_scale,
         },
         path,
     )
