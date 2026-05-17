@@ -31,7 +31,6 @@ class VPCosineSDE(nn.Module):
         x0: torch.Tensor,
         coords: torch.Tensor,
         time_embedding_scale: float = 999.0,
-        min_snr_gamma: float = 5.0,
     ) -> torch.Tensor:
         batch = x0.shape[0]
         t = self.t_eps + (1.0 - self.t_eps) * torch.rand(batch, device=x0.device)
@@ -40,14 +39,6 @@ class VPCosineSDE(nn.Module):
         xt = mu * x0 + sigma * noise
         model_input = torch.cat([xt, coords.expand(batch, -1, -1, -1)], dim=1)
         pred_noise = model(model_input, t * time_embedding_scale)
-        if min_snr_gamma > 0:
-            # eps-prediction min-SNR weighting (Hang et al. 2023): w(t) = min(SNR, gamma) / SNR.
-            # SNR = mu^2 / sigma^2; weight downweights very-low-t (huge SNR) where the model
-            # would otherwise overfit to pixel-level noise floor of the data.
-            snr = (mu * mu) / (sigma * sigma)
-            weight = torch.minimum(snr, snr.new_full((), float(min_snr_gamma))) / snr
-            per_sample = ((pred_noise.float() - noise.float()) ** 2).mean(dim=tuple(range(1, x0.ndim)), keepdim=True)
-            return (per_sample * weight).mean()
         return F.mse_loss(pred_noise.float(), noise.float())
 
     @torch.no_grad()

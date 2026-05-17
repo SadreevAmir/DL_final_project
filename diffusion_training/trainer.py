@@ -36,14 +36,13 @@ class TrainConfig:
     val_batch_size: int = 128
     num_workers: int = 4
     lr: float = 2.0e-4
-    weight_decay: float = 1.0e-3
+    weight_decay: float = 1.0e-4
     grad_accum_steps: int = 1
     max_grad_norm: float = 1.0
     timesteps: int = 1_000
     beta_schedule: str = "cosine"
     alpha_cumprod_min: float = 1.0e-4
-    clip_pred_x0: float = 0.0
-    min_snr_gamma: float = 0.0
+    clip_pred_x0: float = 5.0
     sample_steps: int = 250
     sample_count: int = 32
     sample_every_epochs: int = 1
@@ -56,7 +55,6 @@ class TrainConfig:
     dropout: float = 0.0
     padding_mode: str = "circular"
     coordinate_mode: str = "fourier"
-    random_periodic_shift: bool = True
     ema_decay: float = 0.9997
     precision: str = "bf16"
     sampling_precision: str = "fp32"
@@ -65,7 +63,7 @@ class TrainConfig:
     max_val_batches: int = 0
     limit_train: int = 0
     limit_val: int = 0
-    save_last_every_epochs: int = 10
+    save_last_every_epochs: int = 5
     download_best_in_colab: bool = True
     download_periodic_in_colab: bool = True
 
@@ -282,9 +280,8 @@ def _train_one_epoch(
         if config.max_train_batches > 0 and batch_idx > config.max_train_batches:
             break
         batch = batch.to(device, non_blocking=True)
-        batch, batch_coords = _maybe_roll_periodic(batch, coords, enabled=config.random_periodic_shift)
         with _autocast_context(device, config.precision):
-            loss = diffusion.training_loss(model, batch, coords=batch_coords, min_snr_gamma=config.min_snr_gamma) / config.grad_accum_steps
+            loss = diffusion.training_loss(model, batch, coords=coords) / config.grad_accum_steps
         scaler.scale(loss).backward()
         pending_backward = True
 
@@ -321,7 +318,7 @@ def _validate(
             break
         batch = batch.to(device, non_blocking=True)
         with _autocast_context(device, config.precision):
-            loss = diffusion.training_loss(model, batch, coords=coords, min_snr_gamma=config.min_snr_gamma)
+            loss = diffusion.training_loss(model, batch, coords=coords)
         losses.append(float(loss.detach().item()))
     return float(np.mean(losses))
 
@@ -442,30 +439,6 @@ def _make_loader(dataset, batch_size: int, num_workers: int, shuffle: bool) -> D
     )
 
 
-def _maybe_roll_periodic(
-    batch: torch.Tensor,
-    coords: torch.Tensor,
-    enabled: bool,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Apply a random circular shift to (data, coords) for periodic data augmentation.
-
-    Rolling both by the same shift keeps every (data_value, coord_value) pair
-    physically consistent. With Fourier coords this is essentially free; with
-    linear coords the rolled grid still corresponds to the rolled data, the
-    model just sees a translated coordinate frame.
-    """
-    if not enabled:
-        return batch, coords
-    height, width = batch.shape[-2:]
-    shift_h = int(torch.randint(0, height, ()).item())
-    shift_w = int(torch.randint(0, width, ()).item())
-    if shift_h == 0 and shift_w == 0:
-        return batch, coords
-    rolled_batch = torch.roll(batch, shifts=(shift_h, shift_w), dims=(-2, -1))
-    rolled_coords = torch.roll(coords, shifts=(shift_h, shift_w), dims=(-2, -1))
-    return rolled_batch, rolled_coords
-
-
 def _make_coord_grid(height: int, width: int, device: torch.device, mode: str = "fourier") -> torch.Tensor:
     """Build a clean coordinate field as input channels.
 
@@ -523,14 +496,15 @@ def _autocast_context(device: torch.device, precision: str):
     return torch.amp.autocast(device_type="cuda", dtype=dtype)
 
 
-@torch.no_grad()
 def _update_ema(ema_model: nn.Module, model: nn.Module, decay: float) -> None:
-    ema_params = list(ema_model.parameters())
-    model_params = list(model.parameters())
-    torch._foreach_mul_(ema_params, decay)
-    torch._foreach_add_(ema_params, model_params, alpha=1.0 - decay)
-    for ema_buffer, model_buffer in zip(ema_model.buffers(), model.buffers()):
-        ema_buffer.copy_(model_buffer)
+    ema_params = dict(ema_model.named_parameters())
+    model_params = dict(model.named_parameters())
+    for name, ema_param in ema_params.items():
+        ema_param.data.mul_(decay).add_(model_params[name].data, alpha=1.0 - decay)
+    ema_buffers = dict(ema_model.named_buffers())
+    model_buffers = dict(model.named_buffers())
+    for name, ema_buffer in ema_buffers.items():
+        ema_buffer.copy_(model_buffers[name])
 
 
 def _unwrap_model(model: nn.Module) -> nn.Module:
@@ -570,6 +544,5 @@ def _set_reproducibility(seed: int) -> None:
 def _configure_torch_for_a100() -> None:
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
-    torch.backends.cudnn.benchmark = True
     if hasattr(torch, "set_float32_matmul_precision"):
         torch.set_float32_matmul_precision("high")
