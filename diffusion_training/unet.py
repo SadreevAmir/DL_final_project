@@ -21,6 +21,7 @@ class DiffusersUNet(nn.Module):
         image_size: int = 64,
         dropout: float = 0.0,
         attention_head_dim: int = 32,
+        padding_mode: str = "circular",
     ) -> None:
         super().__init__()
         try:
@@ -50,6 +51,22 @@ class DiffusersUNet(nn.Module):
             norm_num_groups=32,
             attention_head_dim=attention_head_dim,
         )
+        if padding_mode != "zeros":
+            _set_conv_padding_mode(self.model, padding_mode)
+        self.padding_mode = padding_mode
 
     def forward(self, x: torch.Tensor, timesteps: torch.Tensor) -> torch.Tensor:
         return self.model(x, timesteps, return_dict=False)[0]
+
+
+def _set_conv_padding_mode(model: nn.Module, padding_mode: str) -> None:
+    """Switch every nn.Conv2d in `model` to use the given padding_mode.
+
+    diffusers.UNet2DModel does not expose padding_mode, but nn.Conv2d honors
+    the attribute at forward time. 1x1 convs have padding=0 so the mode has
+    no effect; only k>=3 spatial convs are affected, which is what we want
+    for periodic PDE data.
+    """
+    for module in model.modules():
+        if isinstance(module, nn.Conv2d):
+            module.padding_mode = padding_mode

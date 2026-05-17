@@ -53,6 +53,8 @@ class TrainConfig:
     num_res_blocks: int = 3
     attention_head_dim: int = 32
     dropout: float = 0.0
+    padding_mode: str = "circular"
+    coordinate_mode: str = "fourier"
     ema_decay: float = 0.999
     precision: str = "bf16"
     sampling_precision: str = "fp32"
@@ -103,24 +105,27 @@ def train_diffusion_model(config: TrainConfig, dataset: LoadedDataset | None = N
     train_loader = _make_loader(dataset.train, config.batch_size, config.num_workers, shuffle=True)
     val_loader = _make_loader(dataset.val, config.val_batch_size, config.num_workers, shuffle=False)
 
-    coords = _make_coord_grid(dataset.stats.height, dataset.stats.width, device)
+    coords = _make_coord_grid(dataset.stats.height, dataset.stats.width, device, mode=config.coordinate_mode)
+    coord_channels = int(coords.shape[1])
     model = DiffusersUNet(
-        in_channels=dataset.stats.channels + 2,
+        in_channels=dataset.stats.channels + coord_channels,
         out_channels=dataset.stats.channels,
         channels_per_level=_parse_int_tuple(config.channels_per_level),
         num_res_blocks=config.num_res_blocks,
         image_size=dataset.stats.height,
         dropout=config.dropout,
         attention_head_dim=config.attention_head_dim,
+        padding_mode=config.padding_mode,
     ).to(device)
     ema_model = DiffusersUNet(
-        in_channels=dataset.stats.channels + 2,
+        in_channels=dataset.stats.channels + coord_channels,
         out_channels=dataset.stats.channels,
         channels_per_level=_parse_int_tuple(config.channels_per_level),
         num_res_blocks=config.num_res_blocks,
         image_size=dataset.stats.height,
         dropout=config.dropout,
         attention_head_dim=config.attention_head_dim,
+        padding_mode=config.padding_mode,
     ).to(device)
     ema_model.load_state_dict(model.state_dict())
     ema_model.eval()
@@ -430,11 +435,23 @@ def _make_loader(dataset, batch_size: int, num_workers: int, shuffle: bool) -> D
     )
 
 
-def _make_coord_grid(height: int, width: int, device: torch.device) -> torch.Tensor:
-    y = torch.linspace(-1.0, 1.0, height, device=device)
-    x = torch.linspace(-1.0, 1.0, width, device=device)
-    yy, xx = torch.meshgrid(y, x, indexing="ij")
-    return torch.stack((xx, yy), dim=0).unsqueeze(0)
+def _make_coord_grid(height: int, width: int, device: torch.device, mode: str = "fourier") -> torch.Tensor:
+    """Build a clean coordinate field as input channels.
+
+    "fourier" returns 4 strictly periodic channels (sin/cos of 2pi*x/L and 2pi*y/L)
+    suitable for periodic PDE data; "linear" returns the legacy (x, y) ramp in [-1, 1].
+    """
+    if mode == "fourier":
+        x_angles = torch.arange(width, device=device, dtype=torch.float32) * (2.0 * math.pi / width)
+        y_angles = torch.arange(height, device=device, dtype=torch.float32) * (2.0 * math.pi / height)
+        yy, xx = torch.meshgrid(y_angles, x_angles, indexing="ij")
+        return torch.stack((torch.sin(xx), torch.cos(xx), torch.sin(yy), torch.cos(yy)), dim=0).unsqueeze(0)
+    if mode == "linear":
+        y = torch.linspace(-1.0, 1.0, height, device=device)
+        x = torch.linspace(-1.0, 1.0, width, device=device)
+        yy, xx = torch.meshgrid(y, x, indexing="ij")
+        return torch.stack((xx, yy), dim=0).unsqueeze(0)
+    raise ValueError(f"Unknown coordinate_mode: {mode!r}")
 
 
 def _optimizer_step(

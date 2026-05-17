@@ -49,6 +49,8 @@ class ScoreTrainConfig:
     num_res_blocks: int = 3
     attention_head_dim: int = 32
     dropout: float = 0.0
+    padding_mode: str = "circular"
+    coordinate_mode: str = "fourier"
     time_embedding_scale: float = 999.0
     clip_pred_x0: float = 5.0
     precision: str = "bf16"
@@ -95,25 +97,28 @@ def train_score_model(config: ScoreTrainConfig, dataset: LoadedDataset | None = 
     _write_json(run_dir / "data_stats.json", dataset.stats.to_dict())
     _write_json(run_dir / "dataset_files.json", {"files": dataset.files})
 
-    coords = _make_coord_grid(dataset.stats.height, dataset.stats.width, device)
+    coords = _make_coord_grid(dataset.stats.height, dataset.stats.width, device, mode=config.coordinate_mode)
     data_channels = dataset.stats.channels
+    coord_channels = int(coords.shape[1])
     model = DiffusersUNet(
-        in_channels=data_channels + 2,
+        in_channels=data_channels + coord_channels,
         out_channels=data_channels,
         channels_per_level=_parse_int_tuple(config.channels_per_level),
         num_res_blocks=config.num_res_blocks,
         image_size=dataset.stats.height,
         dropout=config.dropout,
         attention_head_dim=config.attention_head_dim,
+        padding_mode=config.padding_mode,
     ).to(device)
     ema_model = DiffusersUNet(
-        in_channels=data_channels + 2,
+        in_channels=data_channels + coord_channels,
         out_channels=data_channels,
         channels_per_level=_parse_int_tuple(config.channels_per_level),
         num_res_blocks=config.num_res_blocks,
         image_size=dataset.stats.height,
         dropout=config.dropout,
         attention_head_dim=config.attention_head_dim,
+        padding_mode=config.padding_mode,
     ).to(device)
     ema_model.load_state_dict(model.state_dict())
     ema_model.eval()
@@ -151,7 +156,7 @@ def train_score_model(config: ScoreTrainConfig, dataset: LoadedDataset | None = 
     global_step = 0
     print("Starting score-based VP SDE training")
     print(f"Run directory: {run_dir}")
-    print(f"Model input channels: {data_channels} noisy data + 2 clean coordinate channels")
+    print(f"Model input channels: {data_channels} noisy data + {coord_channels} clean coordinate channels ({config.coordinate_mode})")
     print("Model: diffusers.UNet2DModel")
     print(f"Timestep scale: continuous VP-SDE t in [0, 1] is passed as t * {config.time_embedding_scale:g}.")
 
@@ -344,11 +349,23 @@ def _vorticity_field(images: np.ndarray) -> np.ndarray:
     return (duy_dx - dux_dy).astype(np.float32)
 
 
-def _make_coord_grid(height: int, width: int, device: torch.device) -> torch.Tensor:
-    y = torch.linspace(-1.0, 1.0, height, device=device)
-    x = torch.linspace(-1.0, 1.0, width, device=device)
-    yy, xx = torch.meshgrid(y, x, indexing="ij")
-    return torch.stack((xx, yy), dim=0).unsqueeze(0)
+def _make_coord_grid(height: int, width: int, device: torch.device, mode: str = "fourier") -> torch.Tensor:
+    """Build a clean coordinate field as input channels.
+
+    "fourier" returns 4 strictly periodic channels (sin/cos of 2pi*x/L and 2pi*y/L)
+    suitable for periodic PDE data; "linear" returns the legacy (x, y) ramp in [-1, 1].
+    """
+    if mode == "fourier":
+        x_angles = torch.arange(width, device=device, dtype=torch.float32) * (2.0 * math.pi / width)
+        y_angles = torch.arange(height, device=device, dtype=torch.float32) * (2.0 * math.pi / height)
+        yy, xx = torch.meshgrid(y_angles, x_angles, indexing="ij")
+        return torch.stack((torch.sin(xx), torch.cos(xx), torch.sin(yy), torch.cos(yy)), dim=0).unsqueeze(0)
+    if mode == "linear":
+        y = torch.linspace(-1.0, 1.0, height, device=device)
+        x = torch.linspace(-1.0, 1.0, width, device=device)
+        yy, xx = torch.meshgrid(y, x, indexing="ij")
+        return torch.stack((xx, yy), dim=0).unsqueeze(0)
+    raise ValueError(f"Unknown coordinate_mode: {mode!r}")
 
 
 def _save_checkpoint(
@@ -374,8 +391,7 @@ def _save_checkpoint(
             "global_step": global_step,
             "best_val_loss": best_val,
             "history": history,
-            "coordinate_channels": ["x", "y"],
-            "coordinate_range": [-1.0, 1.0],
+            "coordinate_mode": config.coordinate_mode,
             "time_embedding_scale": config.time_embedding_scale,
         },
         path,
