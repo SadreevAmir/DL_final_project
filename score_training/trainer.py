@@ -332,6 +332,17 @@ def _parse_int_tuple(value: str) -> tuple[int, ...]:
     return tuple(int(part.strip()) for part in value.split(",") if part.strip())
 
 
+def _make_run_dir(config: ScoreTrainConfig, dataset: LoadedDataset) -> Path:
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    name = (
+        f"score_vp_{config.dataset_tag}_{dataset.stats.channels}ch_"
+        f"{dataset.stats.height}x{dataset.stats.width}_coords_{config.precision}_{timestamp}"
+    )
+    path = Path(config.output_dir) / name
+    path.mkdir(parents=True, exist_ok=False)
+    return path
+
+
 def _autocast_context(device: torch.device, precision: str):
     if device.type != "cuda" or precision == "fp32":
         return torch.amp.autocast(device_type=device.type, enabled=False)
