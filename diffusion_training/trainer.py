@@ -36,7 +36,7 @@ class TrainConfig:
     val_batch_size: int = 128
     num_workers: int = 4
     lr: float = 2.0e-4
-    weight_decay: float = 1.0e-4
+    weight_decay: float = 1.0e-3
     grad_accum_steps: int = 1
     max_grad_norm: float = 1.0
     timesteps: int = 1_000
