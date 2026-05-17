@@ -44,6 +44,9 @@ class TrainConfig:
     sample_steps: int = 250
     sample_count: int = 32
     sample_every_epochs: int = 1
+    display_samples_in_notebook: bool = False
+    use_ema_for_validation: bool = False
+    use_ema_for_sampling: bool = False
     base_channels: int = 128
     channel_mults: str = "1,2,4,4"
     num_res_blocks: int = 2
@@ -154,8 +157,11 @@ def train_diffusion_model(config: TrainConfig, dataset: LoadedDataset | None = N
             global_step=global_step,
             epoch=epoch,
         )
+        eval_model = ema_model if config.use_ema_for_validation else _unwrap_model(model)
+        sample_model = ema_model if config.use_ema_for_sampling else _unwrap_model(model)
+
         val_loss = _validate(
-            model=ema_model,
+            model=eval_model,
             diffusion=diffusion,
             loader=val_loader,
             device=device,
@@ -170,13 +176,16 @@ def train_diffusion_model(config: TrainConfig, dataset: LoadedDataset | None = N
         if config.sample_every_epochs > 0 and epoch % config.sample_every_epochs == 0:
             sample_path = run_dir / "samples" / f"epoch_{epoch:04d}_val_{val_loss:.6f}.png"
             _save_samples(
-                model=ema_model,
+                model=sample_model,
                 diffusion=diffusion,
                 dataset=dataset,
                 device=device,
                 config=config,
                 path=sample_path,
             )
+            print(f"Saved unconditional samples: {sample_path}")
+            if config.display_samples_in_notebook:
+                _display_image_in_notebook(sample_path)
 
         record = {
             "epoch": epoch,
@@ -449,6 +458,16 @@ def _download_in_colab(path: Path) -> None:
         files.download(str(path))
     except Exception as exc:  # pragma: no cover - only used in Colab.
         print(f"Could not trigger Colab download for {path}: {exc}")
+
+
+def _display_image_in_notebook(path: Path) -> None:
+    try:
+        from IPython.display import display  # type: ignore
+        from PIL import Image
+
+        display(Image.open(path))
+    except Exception as exc:  # pragma: no cover - notebook convenience only.
+        print(f"Could not display sample image {path}: {exc}")
 
 
 def _write_json(path: Path, payload: object) -> None:
