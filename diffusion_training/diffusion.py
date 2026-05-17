@@ -13,6 +13,7 @@ class GaussianDiffusion(nn.Module):
         timesteps: int = 1_000,
         beta_schedule: str = "cosine",
         objective: str = "eps",
+        alpha_cumprod_min: float = 1.0e-4,
     ) -> None:
         super().__init__()
         if objective != "eps":
@@ -20,11 +21,12 @@ class GaussianDiffusion(nn.Module):
 
         betas = _make_beta_schedule(timesteps, beta_schedule)
         alphas = 1.0 - betas
-        alphas_cumprod = torch.cumprod(alphas, dim=0)
+        alphas_cumprod = torch.cumprod(alphas, dim=0).clamp_min(alpha_cumprod_min)
         alphas_cumprod_prev = torch.cat([torch.ones(1), alphas_cumprod[:-1]], dim=0)
 
         self.timesteps = timesteps
         self.objective = objective
+        self.alpha_cumprod_min = float(alpha_cumprod_min)
         self.register_buffer("betas", betas)
         self.register_buffer("alphas", alphas)
         self.register_buffer("alphas_cumprod", alphas_cumprod)
@@ -63,14 +65,15 @@ class GaussianDiffusion(nn.Module):
         device: torch.device,
         sample_steps: int | None = None,
         coords: torch.Tensor | None = None,
+        clip_pred_x0: float = 5.0,
     ) -> torch.Tensor:
         if sample_steps is not None and sample_steps != self.timesteps:
-            return self.ddim_sample(model, shape, device, sample_steps, coords=coords)
+            return self.ddim_sample(model, shape, device, sample_steps, coords=coords, clip_pred_x0=clip_pred_x0)
 
         image = torch.randn(shape, device=device)
         for i in reversed(range(self.timesteps)):
             t = torch.full((shape[0],), i, device=device, dtype=torch.long)
-            image = self.p_sample(model, image, t, i, coords=coords)
+            image = self.p_sample(model, image, t, i, coords=coords, clip_pred_x0=clip_pred_x0)
         return image
 
     @torch.no_grad()
@@ -81,13 +84,22 @@ class GaussianDiffusion(nn.Module):
         t: torch.Tensor,
         t_index: int,
         coords: torch.Tensor | None = None,
+        clip_pred_x0: float = 5.0,
     ) -> torch.Tensor:
         betas_t = _extract(self.betas, t, x.shape)
+        sqrt_alphas_cumprod_t = _extract(self.sqrt_alphas_cumprod, t, x.shape)
         sqrt_one_minus_alphas_cumprod_t = _extract(self.sqrt_one_minus_alphas_cumprod, t, x.shape)
         sqrt_recip_alphas_t = _extract(self.sqrt_recip_alphas, t, x.shape)
 
         model_input = x if coords is None else torch.cat([x, coords.expand(x.shape[0], -1, -1, -1)], dim=1)
-        model_mean = sqrt_recip_alphas_t * (x - betas_t * model(model_input, t) / sqrt_one_minus_alphas_cumprod_t)
+        pred_noise = model(model_input, t)
+        if clip_pred_x0 > 0:
+            pred_x0 = ((x - sqrt_one_minus_alphas_cumprod_t * pred_noise) / sqrt_alphas_cumprod_t).clamp(
+                -clip_pred_x0, clip_pred_x0
+            )
+            pred_noise = (x - sqrt_alphas_cumprod_t * pred_x0) / sqrt_one_minus_alphas_cumprod_t
+
+        model_mean = sqrt_recip_alphas_t * (x - betas_t * pred_noise / sqrt_one_minus_alphas_cumprod_t)
         if t_index == 0:
             return model_mean
         posterior_variance_t = _extract(self.posterior_variance, t, x.shape)
@@ -102,6 +114,7 @@ class GaussianDiffusion(nn.Module):
         sample_steps: int,
         eta: float = 0.0,
         coords: torch.Tensor | None = None,
+        clip_pred_x0: float = 5.0,
     ) -> torch.Tensor:
         times = torch.linspace(-1, self.timesteps - 1, steps=sample_steps + 1, device=device).long()
         times = list(reversed(times.tolist()))
@@ -114,6 +127,8 @@ class GaussianDiffusion(nn.Module):
             alpha = self.alphas_cumprod[time]
             alpha_next = self.alphas_cumprod[next_time] if next_time >= 0 else torch.tensor(1.0, device=device)
             pred_x0 = (image - torch.sqrt(1.0 - alpha) * pred_noise) / torch.sqrt(alpha)
+            if clip_pred_x0 > 0:
+                pred_x0 = pred_x0.clamp(-clip_pred_x0, clip_pred_x0)
             sigma = eta * torch.sqrt((1 - alpha / alpha_next) * (1 - alpha_next) / (1 - alpha))
             c = torch.sqrt(torch.clamp(1 - alpha_next - sigma**2, min=0.0))
             noise = torch.randn_like(image) if next_time > 0 else torch.zeros_like(image)

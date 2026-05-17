@@ -41,18 +41,21 @@ class TrainConfig:
     max_grad_norm: float = 1.0
     timesteps: int = 1_000
     beta_schedule: str = "cosine"
+    alpha_cumprod_min: float = 1.0e-4
+    clip_pred_x0: float = 5.0
     sample_steps: int = 250
     sample_count: int = 32
     sample_every_epochs: int = 1
     display_samples_in_notebook: bool = False
-    use_ema_for_validation: bool = False
-    use_ema_for_sampling: bool = False
+    use_ema_for_validation: bool = True
+    use_ema_for_sampling: bool = True
     channels_per_level: str = "96,192,384"
     num_res_blocks: int = 3
     attention_head_dim: int = 32
     dropout: float = 0.0
-    ema_decay: float = 0.9999
+    ema_decay: float = 0.999
     precision: str = "bf16"
+    sampling_precision: str = "fp32"
     compile_model: bool = False
     max_train_batches: int = 0
     max_val_batches: int = 0
@@ -130,6 +133,7 @@ def train_diffusion_model(config: TrainConfig, dataset: LoadedDataset | None = N
     diffusion = GaussianDiffusion(
         timesteps=config.timesteps,
         beta_schedule=config.beta_schedule,
+        alpha_cumprod_min=config.alpha_cumprod_min,
     ).to(device)
     optimizer = AdamW(model.parameters(), lr=config.lr, weight_decay=config.weight_decay)
     scaler = torch.amp.GradScaler("cuda", enabled=config.precision == "fp16" and device.type == "cuda")
@@ -327,13 +331,29 @@ def _save_samples(
         dataset.stats.height,
         dataset.stats.width,
     )
-    with _autocast_context(device, config.precision):
-        samples = diffusion.sample(model, shape, device=device, sample_steps=config.sample_steps, coords=coords)
+    with _autocast_context(device, config.sampling_precision):
+        samples = diffusion.sample(
+            model,
+            shape,
+            device=device,
+            sample_steps=config.sample_steps,
+            coords=coords,
+            clip_pred_x0=config.clip_pred_x0,
+        )
     samples = samples.float().cpu().numpy()
     mean = np.asarray(dataset.stats.mean, dtype=np.float32).reshape(1, -1, 1, 1)
     std = np.asarray(dataset.stats.std, dtype=np.float32).reshape(1, -1, 1, 1)
     raw = samples * std + mean
-    _save_preview_grid(raw, path)
+    _save_field_previews(raw, path)
+
+
+def _save_field_previews(images: np.ndarray, path: Path) -> None:
+    _save_preview_grid(_vorticity_field(images), path)
+    if images.shape[1] == 2:
+        ux_path = path.with_name(f"{path.stem}_ux.png")
+        uy_path = path.with_name(f"{path.stem}_uy.png")
+        _save_preview_grid(images[:, 0], ux_path)
+        _save_preview_grid(images[:, 1], uy_path)
 
 
 def _save_preview_grid(images: np.ndarray, path: Path) -> None:
@@ -345,27 +365,31 @@ def _save_preview_grid(images: np.ndarray, path: Path) -> None:
     for ax in axes_np:
         ax.axis("off")
 
-    visual = _visualize_field(images)
-    vmax = float(np.nanpercentile(np.abs(visual), 99.0))
+    vmax = float(np.nanpercentile(np.abs(images), 99.0))
     if not np.isfinite(vmax) or vmax <= 0:
         vmax = 1.0
-    for ax, image in zip(axes_np, visual):
+    for ax, image in zip(axes_np, images):
         ax.imshow(image, cmap="RdBu_r", vmin=-vmax, vmax=vmax)
     fig.tight_layout()
     fig.savefig(path, dpi=150)
     plt.close(fig)
 
 
-def _visualize_field(images: np.ndarray) -> np.ndarray:
+def _vorticity_field(images: np.ndarray) -> np.ndarray:
     if images.shape[1] == 1:
         return images[:, 0]
-    if images.shape[1] == 2:
-        ux = images[:, 0]
-        uy = images[:, 1]
-        return 0.5 * (np.roll(uy, -1, axis=-1) - np.roll(uy, 1, axis=-1)) - 0.5 * (
-            np.roll(ux, -1, axis=-2) - np.roll(ux, 1, axis=-2)
-        )
-    return images[:, 0]
+    if images.shape[1] != 2:
+        return images[:, 0]
+    ux = images[:, 0].astype(np.float32)
+    uy = images[:, 1].astype(np.float32)
+    height, width = ux.shape[-2:]
+    kx = (2.0 * np.pi * np.fft.fftfreq(width)).astype(np.float32)
+    ky = (2.0 * np.pi * np.fft.fftfreq(height)).astype(np.float32)
+    ux_hat = np.fft.fft2(ux)
+    uy_hat = np.fft.fft2(uy)
+    duy_dx = np.fft.ifft2(1j * kx[None, None, :] * uy_hat).real
+    dux_dy = np.fft.ifft2(1j * ky[None, :, None] * ux_hat).real
+    return (duy_dx - dux_dy).astype(np.float32)
 
 
 def _save_checkpoint(

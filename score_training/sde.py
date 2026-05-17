@@ -50,6 +50,7 @@ class VPCosineSDE(nn.Module):
         steps: int,
         device: torch.device,
         time_embedding_scale: float = 999.0,
+        clip_pred_x0: float = 5.0,
     ) -> torch.Tensor:
         x = torch.randn(shape, device=device)
         times = torch.linspace(1.0, 0.0, steps + 1, device=device)
@@ -61,11 +62,12 @@ class VPCosineSDE(nn.Module):
             mu, sigma = self.mu_sigma(t, x.shape)
             mu_next, sigma_next = self.mu_sigma(t_next, x.shape)
             pred_noise = model(torch.cat([x, coords_batch], dim=1), t * time_embedding_scale)
-            score = -pred_noise / sigma
 
-            # Deterministic VP/DDIM update for an epsilon-prediction model.
-            # Since score = -eps/sigma, this is equivalent to:
-            # x_next = mu_next * x0_hat + sigma_next * eps_hat.
-            x = (mu_next / mu) * x - mu_next * (sigma_next / mu_next - sigma / mu) * sigma * score
+            # Deterministic VP/DDIM update written via explicit x0 prediction so we
+            # can clip it to the data range and prevent error blow-up at small mu.
+            pred_x0 = (x - sigma * pred_noise) / mu
+            if clip_pred_x0 > 0:
+                pred_x0 = pred_x0.clamp(-clip_pred_x0, clip_pred_x0)
+            x = mu_next * pred_x0 + sigma_next * pred_noise
 
         return x
