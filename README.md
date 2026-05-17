@@ -27,6 +27,70 @@ notebooks/kolmogorov_64_10k/generate_kolmogorov_64_10k_colab.ipynb
 notebooks/kolmogorov_256_to_64_100k/generate_kolmogorov_256_to_64_100k_colab.ipynb
 ```
 
+## Обучение diffusion prior
+
+Код обучения находится в:
+
+```text
+diffusion_training/
+scripts/train_diffusion.py
+notebooks/train_diffusion_a100_bf16_colab.ipynb
+```
+
+Пайплайн обучает unconditional DDPM/VP diffusion prior на сохраненных PDE snapshots. Перед
+обучением датасет целиком загружается в RAM, по train split считаются channel-wise `mean` и `std`,
+после чего train/val нормализуются по этим статистикам. Каждую эпоху считается validation loss,
+сохраняются unconditional samples для наблюдения за прогрессом и checkpoint с `model`, `ema_model`,
+optimizer state, config, dataset stats и history. Если validation loss улучшился, сохраняется
+`best_*.pt`; в Colab notebook этот файл дополнительно скачивается через `files.download`.
+
+`--data-source` может быть:
+
+- публичной ссылкой Yandex Disk на `.zip`, `.npz` или папку;
+- локальным `.zip`/`.npz`;
+- локальной папкой с `.npz` chunks или split shards.
+
+Для публичной папки Yandex Disk загрузчик скачивает `.npz` и `.json` файлы по отдельности в
+`cache_dir` и пропускает уже скачанные файлы с совпадающим размером. Эта ссылка работает напрямую:
+
+```text
+https://disk.yandex.ru/d/rrjDGzzX5cfFnA
+```
+
+В этой папке сейчас есть `train_000..015.npz`, `val_000..001.npz` и `test_000.npz`. Для обучения
+используются только train/val, поэтому отсутствующий `test_001.npz` не блокирует training pipeline.
+
+Статистики нормализации сохраняются в JSON. Если указать `--stats-cache-path`, то при следующем
+запуске `mean/std` будут загружены из этого файла, а не пересчитаны:
+
+Пример локального запуска:
+
+```bash
+python3 scripts/train_diffusion.py \
+  --data-source https://disk.yandex.ru/d/rrjDGzzX5cfFnA \
+  --stats-cache-path data/download_cache/kolmogorov_velocity_256_to_64_train_stats.json \
+  --dataset-tag kolmogorov_velocity_256_to_64 \
+  --epochs 100 \
+  --batch-size 256 \
+  --val-batch-size 256 \
+  --precision bf16 \
+  --base-channels 128 \
+  --channel-mults 1,2,4,4 \
+  --attention-resolutions 16 \
+  --sample-every-epochs 1 \
+  --sample-steps 250
+```
+
+Для Colab/A100 используйте:
+
+```text
+notebooks/train_diffusion_a100_bf16_colab.ipynb
+```
+
+В notebook нужно указать `DATA_SOURCE` как публичную ссылку Yandex Disk или путь к архиву/папке.
+Preset оптимизирован под `64x64` Kolmogorov velocity snapshots `[N, 2, 64, 64]`, A100 40GB и bf16.
+Если памяти не хватает, уменьшите `batch_size` до `128` или `base_channels` до `96`.
+
 ## Что генерируется
 
 Gray-Scott system:
