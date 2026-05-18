@@ -63,7 +63,7 @@ class VPCosineSDE(nn.Module):
             mu_next, sigma_next = self.mu_sigma(t_next, x.shape)
             pred_noise = model(torch.cat([x, coords_batch], dim=1), t * time_embedding_scale)
 
-            # Deterministic VP/DDIM update written via explicit x0 prediction so we
+            # Deterministic VP reverse update written via explicit x0 prediction so we
             # can clip it to the data range and prevent error blow-up at small mu.
             pred_x0 = (x - sigma * pred_noise) / mu
             if clip_pred_x0 > 0:

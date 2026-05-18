@@ -1,6 +1,6 @@
-# PDE Diffusion Priors for Inverse Problems
+# PDE Score Priors for Inverse Problems
 
-Репозиторий для генерации synthetic PDE snapshots и обучения unconditional diffusion prior, который
+Репозиторий для генерации synthetic PDE snapshots и обучения unconditional score-based prior, который
 дальше будет использоваться для zero-shot inverse problems:
 
 ```text
@@ -23,7 +23,7 @@ reconstruct one PDE state x from observation y = A(x) + noise
 
 ## Что уже сделано
 
-В репозитории уже есть три основные части.
+В репозитории уже есть две основные части.
 
 1. Генерация PDE datasets:
 
@@ -44,18 +44,7 @@ Kolmogorov velocity snapshots: images [N, 2, 64, 64]
 Snapshots сохраняются как raw velocity field `(u_x, u_y)`. Нормализация не зашивается в `.npz`;
 она считается по train split во время обучения и сохраняется вместе с checkpoint.
 
-2. DDPM/VP diffusion baseline:
-
-```text
-diffusion_training/
-scripts/train_diffusion.py
-notebooks/train_diffusion_a100_bf16_colab.ipynb
-```
-
-Это дискретный DDPM-style baseline с epsilon prediction. Он полезен для обычной unconditional
-генерации и для DDIM/DDPM-style inverse samplers.
-
-3. Score-based VP-SDE baseline:
+2. Score-based VP-SDE prior:
 
 ```text
 score_training/
@@ -81,7 +70,7 @@ sin(x), cos(x), sin(y), cos(y)
 
 Они не шумятся и не входят в loss. Это важно для periodic Kolmogorov fields.
 
-Во время sampling уже используется deterministic VP/DDIM-like update через prediction чистого поля:
+Во время sampling уже используется deterministic VP reverse update через prediction чистого поля:
 
 ```text
 x_t -> pred_noise -> pred_x0 -> x_{t_next}
@@ -465,27 +454,26 @@ notebooks/kolmogorov_64_10k/generate_kolmogorov_64_10k_colab.ipynb
 notebooks/kolmogorov_256_to_64_100k/generate_kolmogorov_256_to_64_100k_colab.ipynb
 ```
 
-## Обучение diffusion prior
+## Обучение score-based prior
 
 Код обучения находится в:
 
 ```text
-diffusion_training/
-scripts/train_diffusion.py
-notebooks/train_diffusion_a100_bf16_colab.ipynb
+score_training/
+scripts/train_score_vp_coords.py
+notebooks/train_score_vp_coords_a100_bf16_colab.ipynb
 ```
 
-Пайплайн обучает unconditional DDPM/VP diffusion prior на сохраненных PDE snapshots. Перед
+Пайплайн обучает unconditional VP-SDE score model на сохраненных PDE snapshots. Перед
 обучением датасет целиком загружается в RAM, по train split считаются channel-wise `mean` и `std`,
 после чего train/val нормализуются по этим статистикам. Каждую эпоху считается validation loss,
 сохраняются unconditional samples для наблюдения за прогрессом и checkpoint с `model`, `ema_model`,
 optimizer state, config, dataset stats и history. Если validation loss улучшился, сохраняется
 `best_*.pt`; в Colab notebook этот файл дополнительно скачивается через `files.download`.
 
-DDPM baseline и score-based baseline используют одинаковую модель и batch size:
-`diffusers.UNet2DModel` с channels `(96, 192, 384)`, `3` residual blocks per level,
-attention на нижних разрешениях, `attention_head_dim=32`, SiLU, batch size `128`. В обоих
-вариантах к входу модели добавляются clean coordinate channels; текущий default `coordinate_mode="fourier"`
+Используется `diffusers.UNet2DModel` с channels `(96, 192, 384)`, `3` residual blocks per level,
+attention на нижних разрешениях, `attention_head_dim=32`, SiLU, batch size `128`. К входу модели
+добавляются clean coordinate channels; текущий default `coordinate_mode="fourier"`
 использует четыре периодических канала `sin(x), cos(x), sin(y), cos(y)`, а legacy mode `linear`
 использует два канала `(x, y)` в диапазоне `[-1, 1]`. Координатные каналы никогда не шумятся и не
 входят в loss.
@@ -512,25 +500,21 @@ https://disk.yandex.ru/d/rrjDGzzX5cfFnA
 Пример локального запуска:
 
 ```bash
-python3 scripts/train_diffusion.py \
+python3 scripts/train_score_vp_coords.py \
   --data-source https://disk.yandex.ru/d/rrjDGzzX5cfFnA \
   --stats-cache-path data/download_cache/kolmogorov_velocity_256_to_64_train_stats.json \
-  --dataset-tag kolmogorov_velocity_256_to_64 \
-  --epochs 100 \
+  --dataset-tag kolmogorov_velocity_256_to_64_coords \
+  --epochs 1024 \
+  --batches-per-epoch 0 \
   --batch-size 128 \
-  --val-batch-size 128 \
   --precision bf16 \
-  --channels-per-level 96,192,384 \
-  --num-res-blocks 3 \
-  --attention-head-dim 32 \
-  --sample-every-epochs 1 \
-  --sample-steps 250
+  --time-embedding-scale 999
 ```
 
 Для Colab/A100 используйте:
 
 ```text
-notebooks/train_diffusion_a100_bf16_colab.ipynb
+notebooks/train_score_vp_coords_a100_bf16_colab.ipynb
 ```
 
 В notebook нужно указать `DATA_SOURCE` как публичную ссылку Yandex Disk или путь к архиву/папке.
@@ -544,44 +528,16 @@ Preset оптимизирован под `64x64` Kolmogorov velocity snapshots `
   читает `mean/std`, нормализует данные.
 - `Start training`: запускает обучение модели на уже подготовленном `dataset`.
 
-Отдельный score-based VP SDE вариант с clean coordinate channels:
-
-```text
-score_training/
-scripts/train_score_vp_coords.py
-notebooks/train_score_vp_coords_a100_bf16_colab.ipynb
-```
-
-В этом варианте физические velocity channels шумятся по VP SDE из статьи:
+Физические velocity channels шумятся по VP SDE:
 
 ```text
 mu(t) = cos(arccos(1e-3) * t)
 sigma(t) = sqrt(1 - mu(t)^2)
 ```
 
-К входу `diffusers.UNet2DModel` на каждом timestep добавляются clean coordinate channels. По
-умолчанию это четыре periodic Fourier channels `sin(x), cos(x), sin(y), cos(y)`; для старого
-поведения можно указать `--coordinate-mode linear`, тогда используются два канала `(x, y)` в
-диапазоне `[-1, 1]`. Они подаются всегда без шума и не входят в loss; модель предсказывает epsilon
-только для физических каналов. Архитектура совпадает с DDPM вариантом: channels `(96, 192, 384)`,
-`3` residual blocks per level, attention на нижних разрешениях, AdamW, weight decay `1e-3`,
-linear LR decay, `256` sampling steps. Непрерывное VP-SDE время `t in [0, 1]` передается в
-diffusers как `t * 999`, то есть в том же масштабе timestep, что DDPM `0..999`. Эпоха в этом
-варианте теперь означает полный проход по train loader; `batches_per_epoch=0` и `val_batches=0`.
-
-CLI:
-
-```bash
-python3 scripts/train_score_vp_coords.py \
-  --data-source https://disk.yandex.ru/d/rrjDGzzX5cfFnA \
-  --stats-cache-path data/download_cache/kolmogorov_velocity_256_to_64_train_stats.json \
-  --dataset-tag kolmogorov_velocity_256_to_64_coords \
-  --epochs 1024 \
-  --batches-per-epoch 0 \
-  --batch-size 128 \
-  --precision bf16 \
-  --time-embedding-scale 999
-```
+Модель предсказывает epsilon только для физических каналов. Непрерывное VP-SDE время `t in [0, 1]`
+передается в diffusers как `t * 999`. Эпоха означает полный проход по train loader;
+`batches_per_epoch=0` и `val_batches=0`.
 
 ## Что генерируется
 

@@ -7,9 +7,8 @@ from torch import nn
 class DiffusersUNet(nn.Module):
     """Thin wrapper around diffusers.UNet2DModel for epsilon prediction.
 
-    The training code calls models as ``model(x, timestep)``. DDPM passes integer
-    timesteps in ``[0, num_train_timesteps - 1]``. The VP-SDE code maps continuous
-    ``t in [0, 1]`` onto the same timestep scale before calling this module.
+    The score-based VP-SDE code maps continuous ``t in [0, 1]`` onto the timestep
+    scale expected by diffusers before calling this module.
     """
 
     def __init__(

@@ -16,8 +16,8 @@ from torch.optim.lr_scheduler import LinearLR
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
-from diffusion_training.data import LoadedDataset, load_dataset_into_ram
-from diffusion_training.unet import DiffusersUNet
+from .data import LoadedDataset, load_dataset_into_ram
+from .unet import DiffusersUNet
 from .sde import VPCosineSDE
 
 
