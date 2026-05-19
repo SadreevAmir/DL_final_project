@@ -37,6 +37,9 @@ against the same file guarantees identical validation images and corruptions.
 the front of the file, so the visualized examples stay identical when different
 people run different metric sample counts.
 
+`case_batch_size` controls how many samples are corrupted at once while building
+the case file.
+
 ## 2. Implement a method
 
 Each method owns one file:
@@ -66,6 +69,8 @@ python3 scripts/run_inverse_experiment.py \
   --case-file inverse_cases/sparse_grid_val16_seed0.npz \
   --method dps \
   --output-dir runs_inverse/dps_sparse_grid_val16 \
+  --batch-size 8 \
+  --visualization-sample-count 16 \
   --steps 256 \
   --seed 0
 ```

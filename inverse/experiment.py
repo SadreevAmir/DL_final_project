@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import torch
+from tqdm.auto import tqdm
 
 from .cases import load_case_file
 from .checkpoint import load_score_checkpoint
@@ -28,6 +29,7 @@ class ExperimentConfig:
     steps: int = 256
     seed: int = 0
     max_visualizations: int = 16
+    visualization_sample_count: int = -1
     guidance_scale: float = 1.0
     measurement_sigma: float = 0.0
     guidance_start: float = 1.0
@@ -73,8 +75,12 @@ def run_experiment(config: ExperimentConfig) -> Path:
     rows: list[dict[str, object]] = []
     all_recons: list[torch.Tensor] = []
     total = int(cases.x_true_raw.shape[0])
-    for start in range(0, total, config.batch_size):
-        end = min(start + config.batch_size, total)
+    visualization_count = _resolve_visualization_count(config)
+    batch_size = max(1, int(config.batch_size))
+    starts = list(range(0, total, batch_size))
+    progress = tqdm(starts, desc=f"{config.method}:{case_config['operator']}", unit="batch")
+    for start in progress:
+        end = min(start + batch_size, total)
         x_true_raw = torch.from_numpy(cases.x_true_raw[start:end]).to(device=device, dtype=torch.float32)
         y_raw = torch.from_numpy(cases.y_raw[start:end]).to(device=device, dtype=torch.float32)
         y_norm = normalize_observation(y_raw, operator, checkpoint.mean, checkpoint.std, checkpoint.height, checkpoint.width)
@@ -101,7 +107,7 @@ def run_experiment(config: ExperimentConfig) -> Path:
                 row[key] = float(values[local_idx].detach().cpu().item())
             rows.append(row)
 
-            if start + local_idx < config.max_visualizations:
+            if start + local_idx < visualization_count:
                 title = (
                     f"{config.method} | {case_config['operator']} | "
                     f"{sample_id} | rel_l2={row['rel_l2']:.4f}"
@@ -174,3 +180,9 @@ def _resolve_device(device: str) -> torch.device:
     if device == "auto":
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
     return torch.device(device)
+
+
+def _resolve_visualization_count(config: ExperimentConfig) -> int:
+    if config.visualization_sample_count >= 0:
+        return int(config.visualization_sample_count)
+    return int(config.max_visualizations)

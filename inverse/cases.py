@@ -33,6 +33,7 @@ class CaseConfig:
     downsample_factor: int = 4
     blur_sigma: float = 2.0
     device: str = "cpu"
+    case_batch_size: int = 256
 
 
 @dataclass(frozen=True)
@@ -55,12 +56,13 @@ def create_case_file(config: CaseConfig) -> Path:
         visualization_seed=config.visualization_seed,
     )
     device = torch.device(config.device)
-    x = torch.from_numpy(x_true_raw).to(device=device, dtype=torch.float32)
+    if x_true_raw.ndim != 4:
+        raise ValueError(f"Expected x_true_raw shape [N, C, H, W], got {x_true_raw.shape}")
     operator = build_operator(
         config.operator,
-        channels=int(x.shape[1]),
-        height=int(x.shape[2]),
-        width=int(x.shape[3]),
+        channels=int(x_true_raw.shape[1]),
+        height=int(x_true_raw.shape[2]),
+        width=int(x_true_raw.shape[3]),
         device=device,
         stride=config.stride,
         box_size=config.box_size,
@@ -69,9 +71,15 @@ def create_case_file(config: CaseConfig) -> Path:
     )
     generator = torch.Generator(device=device)
     generator.manual_seed(config.corruption_seed)
+    y_parts: list[np.ndarray] = []
+    batch_size = max(1, int(config.case_batch_size))
     with torch.no_grad():
-        y = operator.add_noise(operator(x), config.noise_sigma, generator=generator)
-    y_raw = y.detach().cpu().numpy().astype(np.float32)
+        for start in range(0, int(x_true_raw.shape[0]), batch_size):
+            end = min(start + batch_size, int(x_true_raw.shape[0]))
+            x = torch.from_numpy(x_true_raw[start:end]).to(device=device, dtype=torch.float32)
+            y = operator.add_noise(operator(x), config.noise_sigma, generator=generator)
+            y_parts.append(y.detach().cpu().numpy().astype(np.float32))
+    y_raw = np.concatenate(y_parts, axis=0)
 
     metadata = {
         "case_config": asdict(config),
