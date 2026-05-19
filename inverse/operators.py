@@ -104,14 +104,6 @@ def build_sparse_grid_mask(height: int, width: int, stride: int, device: torch.d
     return mask
 
 
-def build_center_box_mask(height: int, width: int, box_size: int, device: torch.device) -> torch.Tensor:
-    mask = torch.zeros((1, 1, height, width), device=device)
-    y0 = (height - box_size) // 2
-    x0 = (width - box_size) // 2
-    mask[..., y0 : y0 + box_size, x0 : x0 + box_size] = 1.0
-    return mask
-
-
 def build_operator(
     name: str,
     channels: int,
@@ -119,16 +111,12 @@ def build_operator(
     width: int,
     device: torch.device,
     stride: int = 4,
-    box_size: int = 32,
     downsample_factor: int = 4,
     blur_sigma: float = 2.0,
 ) -> LinearOperator:
     if name == "sparse_grid":
         mask = build_sparse_grid_mask(height, width, stride=stride, device=device)
         return MaskOperator(mask=mask, name=f"sparse_grid_stride{stride}").to(device)
-    if name == "center_box":
-        mask = build_center_box_mask(height, width, box_size=box_size, device=device)
-        return MaskOperator(mask=mask, name=f"center_box_{box_size}").to(device)
     if name == "downsample":
         return DownsampleOperator(factor=downsample_factor).to(device)
     if name == "blur":

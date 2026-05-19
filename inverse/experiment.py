@@ -54,7 +54,6 @@ def run_experiment(config: ExperimentConfig) -> Path:
         width=checkpoint.width,
         device=device,
         stride=int(case_config.get("stride", 4)),
-        box_size=int(case_config.get("box_size", 32)),
         downsample_factor=int(case_config.get("downsample_factor", 4)),
         blur_sigma=float(case_config.get("blur_sigma", 2.0)),
     )

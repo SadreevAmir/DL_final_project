@@ -29,7 +29,6 @@ class CaseConfig:
     corruption_seed: int = 0
     noise_sigma: float = 0.0
     stride: int = 4
-    box_size: int = 32
     downsample_factor: int = 4
     blur_sigma: float = 2.0
     device: str = "cpu"
@@ -65,7 +64,6 @@ def create_case_file(config: CaseConfig) -> Path:
         width=int(x_true_raw.shape[3]),
         device=device,
         stride=config.stride,
-        box_size=config.box_size,
         downsample_factor=config.downsample_factor,
         blur_sigma=config.blur_sigma,
     )

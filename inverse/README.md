@@ -23,7 +23,6 @@ Operators:
 
 ```text
 sparse_grid
-center_box
 downsample
 blur
 ```
