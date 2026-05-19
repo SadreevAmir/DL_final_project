@@ -47,13 +47,15 @@ def save_comparison_png(
         (recon_np[1], "recon uy", "RdBu_r", -vmax_uy, vmax_uy),
         (np.abs(recon_np[1] - true_np[1]), "|uy error|", "magma", 0.0, _robust_high(np.abs(recon_np[1] - true_np[1]))),
         (true_w, "true vorticity", "RdBu_r", -vmax_w, vmax_w),
-        (_vorticity_for_display(obs_proxy_np), "obs vorticity proxy", "RdBu_r", -vmax_w, vmax_w),
         (recon_w, "recon vorticity", "RdBu_r", -vmax_w, vmax_w),
         (vort_err, "|vorticity error|", "magma", 0.0, vmax_vort_err),
     ]
-    for ax, (image, label, cmap, vmin, vmax) in zip(axes.ravel(), panels):
+    flat_axes = axes.ravel()
+    for ax, (image, label, cmap, vmin, vmax) in zip(flat_axes, panels):
         ax.imshow(image, cmap=cmap, vmin=vmin, vmax=vmax)
         ax.set_title(label, fontsize=8)
+        ax.axis("off")
+    for ax in flat_axes[len(panels):]:
         ax.axis("off")
     fig.suptitle(title, fontsize=9)
     fig.savefig(path, dpi=120)
@@ -68,22 +70,6 @@ def _velocity_channels_for_display(field: np.ndarray) -> tuple[np.ndarray, np.nd
     if field.ndim == 2:
         return field, field
     raise ValueError(f"Cannot display observation proxy with shape {field.shape}")
-
-
-def _vorticity_for_display(field: np.ndarray) -> np.ndarray:
-    if field.ndim == 3 and field.shape[0] == 2:
-        ux = field[0]
-        uy = field[1]
-        height, width = ux.shape[-2:]
-        kx = (2.0 * np.pi * np.fft.fftfreq(width)).astype(np.float32)
-        ky = (2.0 * np.pi * np.fft.fftfreq(height)).astype(np.float32)
-        return (
-            np.fft.ifft2(1j * kx[None, :] * np.fft.fft2(uy)).real
-            - np.fft.ifft2(1j * ky[:, None] * np.fft.fft2(ux)).real
-        ).astype(np.float32)
-    if field.ndim == 3:
-        return field[0]
-    return field
 
 
 def _robust_high(x: np.ndarray) -> float:
