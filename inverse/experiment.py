@@ -96,10 +96,15 @@ def run_experiment(config: ExperimentConfig) -> Path:
         batch_metrics = compute_metrics(x_hat_raw, x_true_raw, y_raw, operator)
         for local_idx in range(end - start):
             sample_id = cases.sample_ids[start + local_idx]
+            physics_informed = float(config.div_weight) > 0.0
+            method_variant = f"{config.method}_physics" if physics_informed else config.method
             row = {
                 "sample_id": sample_id,
                 "seed": config.seed,
                 "method": config.method,
+                "method_variant": method_variant,
+                "physics_informed": int(physics_informed),
+                "div_weight": float(config.div_weight),
                 "operator": case_config["operator"],
                 "noise_sigma": float(case_config.get("noise_sigma", 0.0)),
             }
@@ -109,8 +114,8 @@ def run_experiment(config: ExperimentConfig) -> Path:
 
             if start + local_idx < visualization_count:
                 title = (
-                    f"{config.method} | {case_config['operator']} | "
-                    f"{sample_id} | rel_l2={row['rel_l2']:.4f}"
+                    f"{method_variant} | {case_config['operator']} | "
+                    f"div_weight={config.div_weight:g} | {sample_id} | rel_l2={row['rel_l2']:.4f}"
                 )
                 save_comparison_png(
                     out_dir / "figures" / f"{start + local_idx:04d}_{sample_id}.png",
@@ -162,6 +167,9 @@ def _write_metrics_csv(path: Path, rows: list[dict[str, object]]) -> None:
         "sample_id",
         "seed",
         "method",
+        "method_variant",
+        "physics_informed",
+        "div_weight",
         "operator",
         "noise_sigma",
         "rel_l2",
