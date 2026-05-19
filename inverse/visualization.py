@@ -47,11 +47,16 @@ def save_comparison_png(
         (recon_np[1], "recon uy", "RdBu_r", -vmax_uy, vmax_uy),
         (np.abs(recon_np[1] - true_np[1]), "|uy error|", "magma", 0.0, _robust_high(np.abs(recon_np[1] - true_np[1]))),
         (true_w, "true vorticity", "RdBu_r", -vmax_w, vmax_w),
+        None,
         (recon_w, "recon vorticity", "RdBu_r", -vmax_w, vmax_w),
         (vort_err, "|vorticity error|", "magma", 0.0, vmax_vort_err),
     ]
     flat_axes = axes.ravel()
-    for ax, (image, label, cmap, vmin, vmax) in zip(flat_axes, panels):
+    for ax, panel in zip(flat_axes, panels):
+        if panel is None:
+            ax.axis("off")
+            continue
+        image, label, cmap, vmin, vmax = panel
         ax.imshow(image, cmap=cmap, vmin=vmin, vmax=vmax)
         ax.set_title(label, fontsize=8)
         ax.axis("off")
