@@ -28,7 +28,6 @@ def save_comparison_png(
         obs_proxy_np = obs_proxy.detach().cpu().numpy()[0]
         true_w = spectral_vorticity(x_true_raw).detach().cpu().numpy()[0]
         recon_w = spectral_vorticity(x_hat_raw).detach().cpu().numpy()[0]
-        err_speed = torch.linalg.vector_norm(x_hat_raw - x_true_raw, dim=1).detach().cpu().numpy()[0]
         vort_err = np.abs(recon_w - true_w)
 
     obs_ux, obs_uy = _velocity_channels_for_display(obs_proxy_np)
@@ -36,9 +35,8 @@ def save_comparison_png(
     vmax_uy = _robust_absmax(np.stack([true_np[1], recon_np[1], obs_uy]))
     vmax_w = _robust_absmax(np.stack([true_w, recon_w]))
     vmax_vort_err = float(np.nanpercentile(vort_err, 99.0)) or 1.0
-    vmax_speed_err = float(np.nanpercentile(err_speed, 99.0)) or 1.0
 
-    fig, axes = plt.subplots(3, 4, figsize=(12.4, 9.0), constrained_layout=True)
+    fig, axes = plt.subplots(3, 4, figsize=(9.6, 6.8), constrained_layout=True)
     panels = [
         (true_np[0], "true ux", "RdBu_r", -vmax_ux, vmax_ux),
         (obs_ux, "obs ux proxy", "RdBu_r", -vmax_ux, vmax_ux),
@@ -55,12 +53,10 @@ def save_comparison_png(
     ]
     for ax, (image, label, cmap, vmin, vmax) in zip(axes.ravel(), panels):
         ax.imshow(image, cmap=cmap, vmin=vmin, vmax=vmax)
-        ax.set_title(label, fontsize=9)
+        ax.set_title(label, fontsize=8)
         ax.axis("off")
-    axes.ravel()[-1].text(0.5, 0.5, f"speed error\np99={vmax_speed_err:.3g}", ha="center", va="center", fontsize=10)
-    axes.ravel()[-1].axis("off")
-    fig.suptitle(title, fontsize=10)
-    fig.savefig(path, dpi=160)
+    fig.suptitle(title, fontsize=9)
+    fig.savefig(path, dpi=120)
     plt.close(fig)
 
 
