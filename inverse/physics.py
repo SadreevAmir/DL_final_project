@@ -31,4 +31,4 @@ def divergence_loss(x: torch.Tensor) -> torch.Tensor:
     kx = (2.0 * torch.pi * torch.fft.fftfreq(width, device=x.device, dtype=x.dtype)).view(1, 1, width)
     ky = (2.0 * torch.pi * torch.fft.fftfreq(height, device=x.device, dtype=x.dtype)).view(1, height, 1)
     div = torch.fft.ifft2(1j * kx * torch.fft.fft2(ux) + 1j * ky * torch.fft.fft2(uy)).real
-    return torch.mean(torch.sum(div.reshape(div.shape[0], -1) ** 2, dim=1))
+    return torch.sum(div ** 2)

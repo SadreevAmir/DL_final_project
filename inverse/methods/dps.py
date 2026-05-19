@@ -100,7 +100,7 @@ def _measurement_loss(pred_y: torch.Tensor, y: torch.Tensor, measurement_sigma: 
     residual = pred_y - y
     if measurement_sigma > 0.0:
         residual = residual / measurement_sigma
-    return torch.mean(torch.sum(residual.reshape(residual.shape[0], -1) ** 2, dim=1))
+    return torch.sum(residual ** 2)
 
 
 def _clip_gradient(grad: torch.Tensor, max_norm: float) -> torch.Tensor:
