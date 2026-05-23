@@ -7,7 +7,7 @@ import torch.nn.functional as F
 
 from inverse.checkpoint import LoadedScoreCheckpoint
 from inverse.methods.base import SamplerParams
-from inverse.operators import DownsampleOperator, LinearOperator, PeriodicGaussianBlurOperator
+from inverse.operators import DownsampleOperator, LinearOperator, MaskOperator, PeriodicGaussianBlurOperator
 from inverse.physics import helmholtz_project
 from inverse.primitives import predict_eps_and_x0, vp_ddim_step
 from inverse.utils import denormalize, normalize_raw
@@ -24,6 +24,7 @@ def sample(
     PeriodicGaussianBlurOperator uses the Fourier-basis DDRM correction.
     DownsampleOperator uses a stable block-mean projection correction, because
     average-pool decimation is not diagonal in the full-resolution Fourier basis.
+    MaskOperator uses pixel-basis projection onto observed entries.
     Works entirely in normalized model space.
 
     Extra params (passed via params.extra):
@@ -43,8 +44,9 @@ def sample(
     generator.manual_seed(params.seed)
     x = torch.randn(shape, device=device, generator=generator)
 
+    use_mask_projection = isinstance(operator, MaskOperator)
     use_block_projection = isinstance(operator, DownsampleOperator)
-    if use_block_projection:
+    if use_mask_projection or use_block_projection:
         H = None
         y_freq = None
     else:
@@ -73,7 +75,19 @@ def sample(
                 )
                 mu_next, sigma_next = checkpoint.sde.mu_sigma(t_next, shape)
 
-                if use_block_projection:
+                if use_mask_projection:
+                    pred_x0 = _mask_correct(
+                        pred_x0=pred_x0,
+                        operator=operator,
+                        y_norm=y_norm,
+                        sigma_t=sigma_t,
+                        mu_t=mu_t,
+                        measurement_sigma=params.measurement_sigma,
+                        eta=eta,
+                        generator=generator,
+                        device=device,
+                    )
+                elif use_block_projection:
                     pred_x0 = _downsample_block_correct(
                         pred_x0=pred_x0,
                         operator=operator,
@@ -109,6 +123,42 @@ def sample(
         checkpoint.model.train(was_training)
 
     return x
+
+
+def _mask_correct(
+    pred_x0: torch.Tensor,
+    operator: MaskOperator,
+    y_norm: torch.Tensor,
+    sigma_t: torch.Tensor,
+    mu_t: torch.Tensor,
+    measurement_sigma: float,
+    eta: float,
+    generator: torch.Generator,
+    device: torch.device,
+) -> torch.Tensor:
+    """Pixel-basis DDRM correction for sparse-grid/mask observations.
+
+    The mask operator has singular values 1 at observed pixels and 0 elsewhere,
+    so noiseless correction replaces only observed entries and leaves the prior
+    prediction in the null space.
+    """
+    residual = y_norm - operator(pred_x0)
+    correction = operator.pinv(residual)
+
+    if measurement_sigma > 0.0:
+        sigma_prior2 = ((sigma_t / mu_t) ** 2).view(pred_x0.shape[0], 1, 1, 1)
+        gain = sigma_prior2 / (sigma_prior2 + measurement_sigma**2)
+        correction = gain * correction
+
+    corrected = pred_x0 + correction
+
+    if eta > 0.0:
+        sigma_prior = (sigma_t / mu_t).view(pred_x0.shape[0], 1, 1, 1)
+        noise = torch.randn(pred_x0.shape, device=device, dtype=pred_x0.dtype, generator=generator)
+        null_noise = noise - operator.pinv(operator(noise))
+        corrected = corrected + eta * sigma_prior * null_noise
+
+    return corrected
 
 
 def _downsample_block_correct(
