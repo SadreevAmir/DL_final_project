@@ -30,7 +30,7 @@ class LoadedScoreCheckpoint:
 
 def load_score_checkpoint(path: str | Path, device: torch.device | str) -> LoadedScoreCheckpoint:
     device = torch.device(device)
-    payload = torch.load(Path(path), map_location=device)
+    payload = torch.load(Path(path), map_location=device, weights_only=False)
     if not isinstance(payload, dict):
         raise TypeError(f"Expected checkpoint dict at {path}, got {type(payload)!r}")
 

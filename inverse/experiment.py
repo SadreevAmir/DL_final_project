@@ -36,6 +36,8 @@ class ExperimentConfig:
     guidance_end: float = 0.0
     gradient_clip: float = 0.0
     div_weight: float = 0.0
+    eta: float = 0.85
+    physics_projection: bool = False
 
 
 def run_experiment(config: ExperimentConfig) -> Path:
@@ -67,6 +69,10 @@ def run_experiment(config: ExperimentConfig) -> Path:
         guidance_end=config.guidance_end,
         gradient_clip=config.gradient_clip,
         div_weight=config.div_weight,
+        extra={
+            "eta": config.eta,
+            "physics_projection": config.physics_projection,
+        },
     )
 
     _write_run_metadata(out_dir, config, cases.metadata, checkpoint.data_stats, operator.name)
@@ -96,16 +102,22 @@ def run_experiment(config: ExperimentConfig) -> Path:
         for local_idx in range(end - start):
             sample_id = cases.sample_ids[start + local_idx]
             physics_informed = float(config.div_weight) > 0.0
-            method_variant = f"{config.method}_physics" if physics_informed else config.method
+            physics_projected = bool(config.physics_projection)
+            method_variant = config.method
+            if physics_informed or physics_projected:
+                method_variant = f"{config.method}_physics"
             row = {
                 "sample_id": sample_id,
                 "seed": config.seed,
                 "method": config.method,
                 "method_variant": method_variant,
                 "physics_informed": int(physics_informed),
+                "physics_projection": int(physics_projected),
                 "div_weight": float(config.div_weight),
                 "operator": case_config["operator"],
                 "noise_sigma": float(case_config.get("noise_sigma", 0.0)),
+                "eta": float(config.eta),
+                "measurement_sigma": float(config.measurement_sigma),
             }
             for key, values in batch_metrics.items():
                 row[key] = float(values[local_idx].detach().cpu().item())
@@ -168,7 +180,10 @@ def _write_metrics_csv(path: Path, rows: list[dict[str, object]]) -> None:
         "method",
         "method_variant",
         "physics_informed",
+        "physics_projection",
         "div_weight",
+        "eta",
+        "measurement_sigma",
         "operator",
         "noise_sigma",
         "rel_l2",

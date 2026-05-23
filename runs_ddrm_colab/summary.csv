@@ -1,0 +1,3 @@
+method_variant,method,physics_informed,physics_projection,operator,run,rel_l2,rmse,measurement_error,divergence,vorticity_rmse
+ddrm,ddrm,0,0,blur,runs_ddrm_colab/ddrm_blur_eta0p0_n16_steps128_sigma2p0,0.04939853376708921,0.018447081616613962,1.9731785982912697e-05,0.1308807856403291,0.05427383328787978
+ddrm,ddrm,0,0,downsample,runs_ddrm_colab/ddrm_downsample_eta0p0_n16_steps128,0.06551351025700565,0.024707620963454205,3.179781447215646e-05,0.019683772407006424,0.04314124898519363
