@@ -36,6 +36,9 @@ class ExperimentConfig:
     guidance_end: float = 0.0
     gradient_clip: float = 0.0
     div_weight: float = 0.0
+    jump_length: int = 10
+    num_resample: int = 10
+    box_size: int = 32
 
 
 def run_experiment(config: ExperimentConfig) -> Path:
@@ -56,6 +59,7 @@ def run_experiment(config: ExperimentConfig) -> Path:
         stride=int(case_config.get("stride", 4)),
         downsample_factor=int(case_config.get("downsample_factor", 4)),
         blur_sigma=float(case_config.get("blur_sigma", 2.0)),
+        box_size=int(case_config.get("box_size", config.box_size)),
     )
     sampler = get_sampler(config.method)
     params = SamplerParams(
@@ -67,6 +71,10 @@ def run_experiment(config: ExperimentConfig) -> Path:
         guidance_end=config.guidance_end,
         gradient_clip=config.gradient_clip,
         div_weight=config.div_weight,
+        extra={
+            "jump_length": config.jump_length,
+            "num_resample": config.num_resample,
+        },
     )
 
     _write_run_metadata(out_dir, config, cases.metadata, checkpoint.data_stats, operator.name)
