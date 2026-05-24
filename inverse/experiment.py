@@ -38,6 +38,7 @@ class ExperimentConfig:
     div_weight: float = 0.0
     jump_length: int = 10
     num_resample: int = 10
+    soft_lambda: float = 0.0
     box_size: int = 32
 
 
@@ -74,6 +75,7 @@ def run_experiment(config: ExperimentConfig) -> Path:
         extra={
             "jump_length": config.jump_length,
             "num_resample": config.num_resample,
+            "soft_lambda": config.soft_lambda,
         },
     )
 

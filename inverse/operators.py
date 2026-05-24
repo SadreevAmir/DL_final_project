@@ -89,6 +89,20 @@ class PeriodicGaussianBlurOperator(LinearOperator):
         weight = self.kernel.to(dtype=x.dtype, device=x.device).expand(x.shape[1], 1, -1, -1)
         return F.conv2d(padded, weight, groups=x.shape[1])
 
+    def pinv(self, y: torch.Tensor, reg: float = 1e-4) -> torch.Tensor:
+        """Wiener deconvolution via FFT: x̂ = H*(k) / (|H(k)|² + reg) · Y(k)."""
+        B, C, H, W = y.shape
+        kH, kW = self.kernel.shape[-2], self.kernel.shape[-1]
+        # Pad kernel to image size, centered at (0,0) via circular shift for correct DFT alignment.
+        padded = y.new_zeros(1, 1, H, W)
+        padded[..., :kH, :kW] = self.kernel.to(dtype=y.dtype)
+        padded = torch.roll(padded, (-(kH // 2), -(kW // 2)), dims=(-2, -1))
+        H_hat = torch.fft.fft2(padded)  # [1, 1, H, W] complex
+        H_sq = H_hat.real ** 2 + H_hat.imag ** 2
+        W_hat = torch.conj(H_hat) / (H_sq + reg)
+        X_hat = W_hat * torch.fft.fft2(y)
+        return torch.fft.ifft2(X_hat).real
+
 
 def _gaussian_kernel2d(sigma: float, truncate: float) -> torch.Tensor:
     radius = max(1, int(math.ceil(truncate * sigma)))
