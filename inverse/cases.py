@@ -31,6 +31,7 @@ class CaseConfig:
     stride: int = 4
     downsample_factor: int = 4
     blur_sigma: float = 2.0
+    box_size: int = 32
     device: str = "cpu"
     case_batch_size: int = 256
 
@@ -66,6 +67,7 @@ def create_case_file(config: CaseConfig) -> Path:
         stride=config.stride,
         downsample_factor=config.downsample_factor,
         blur_sigma=config.blur_sigma,
+        box_size=config.box_size,
     )
     generator = torch.Generator(device=device)
     generator.manual_seed(config.corruption_seed)

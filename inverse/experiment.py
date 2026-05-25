@@ -38,6 +38,9 @@ class ExperimentConfig:
     div_weight: float = 0.0
     eta: float = 0.85
     physics_projection: bool = False
+    jump_length: int = 10
+    num_resample: int = 10
+    box_size: int = 32
 
 
 def run_experiment(config: ExperimentConfig) -> Path:
@@ -58,6 +61,7 @@ def run_experiment(config: ExperimentConfig) -> Path:
         stride=int(case_config.get("stride", 4)),
         downsample_factor=int(case_config.get("downsample_factor", 4)),
         blur_sigma=float(case_config.get("blur_sigma", 2.0)),
+        box_size=int(case_config.get("box_size", config.box_size)),
     )
     sampler = get_sampler(config.method)
     params = SamplerParams(
@@ -72,6 +76,8 @@ def run_experiment(config: ExperimentConfig) -> Path:
         extra={
             "eta": config.eta,
             "physics_projection": config.physics_projection,
+            "jump_length": config.jump_length,
+            "num_resample": config.num_resample,
         },
     )
 
