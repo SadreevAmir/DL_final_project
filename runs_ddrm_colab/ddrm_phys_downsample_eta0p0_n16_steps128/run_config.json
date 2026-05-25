@@ -2,7 +2,7 @@
   "experiment_config": {
     "checkpoint_path": "checkpoints/wrapped_ema_checkpoint.pt",
     "case_file": "inverse_cases/downsample_val16_vis8_seed0.npz",
-    "output_dir": "runs_ddrm_colab/ddrm_downsample_eta0p0_n16_steps128",
+    "output_dir": "runs_ddrm_colab/ddrm_phys_downsample_eta0p0_n16_steps128",
     "method": "ddrm",
     "device": "auto",
     "batch_size": 32,
@@ -17,7 +17,7 @@
     "gradient_clip": 0.0,
     "div_weight": 0.0,
     "eta": 0.0,
-    "physics_projection": false
+    "physics_projection": true
   },
   "case_metadata": {
     "case_config": {

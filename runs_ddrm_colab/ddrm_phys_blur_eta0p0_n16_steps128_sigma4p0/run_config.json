@@ -1,8 +1,8 @@
 {
   "experiment_config": {
     "checkpoint_path": "checkpoints/wrapped_ema_checkpoint.pt",
-    "case_file": "inverse_cases/downsample_val16_vis8_seed0.npz",
-    "output_dir": "runs_ddrm_colab/ddrm_downsample_eta0p0_n16_steps128",
+    "case_file": "inverse_cases/blur_blur4p0_val16_vis8_seed0.npz",
+    "output_dir": "runs_ddrm_colab/ddrm_phys_blur_eta0p0_n16_steps128_sigma4p0",
     "method": "ddrm",
     "device": "auto",
     "batch_size": 32,
@@ -17,13 +17,13 @@
     "gradient_clip": 0.0,
     "div_weight": 0.0,
     "eta": 0.0,
-    "physics_projection": false
+    "physics_projection": true
   },
   "case_metadata": {
     "case_config": {
       "data_source": "data/one_val_cache",
-      "output_path": "inverse_cases/downsample_val16_vis8_seed0.npz",
-      "operator": "downsample",
+      "output_path": "inverse_cases/blur_blur4p0_val16_vis8_seed0.npz",
+      "operator": "blur",
       "split": "val",
       "image_key": "images",
       "cache_dir": "data/download_cache",
@@ -48,8 +48,8 @@
     "observation_shape": [
       16,
       2,
-      16,
-      16
+      64,
+      64
     ],
     "sample_ids": [
       "traj1659_snap47",
@@ -69,7 +69,7 @@
       "traj1673_snap4",
       "traj1639_snap41"
     ],
-    "operator_name": "downsample_x4"
+    "operator_name": "periodic_gaussian_blur_sigma4"
   },
   "data_stats": {
     "mean": [
@@ -88,5 +88,5 @@
     "source": "data/one_val_cache/val_000.npz",
     "stats_source": "checkpoints/best_score_vp_kolmogorov_velocity_256_to_64_coords_2ch_64x64_coords_bf16_20260517_221201_epoch_0014_val_0.028523.pt:data_stats"
   },
-  "operator_name": "downsample_x4"
+  "operator_name": "periodic_gaussian_blur_sigma4"
 }
