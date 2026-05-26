@@ -1,6 +1,6 @@
-PWD G:\Мой диск\Skoltech\DL\Project\DL_final_project\presentation
+PWD g:\Мой диск\Skoltech\DL\Project\DL_final_project\presentation
 INPUT C:\Users\Антон\AppData\Local\MiKTeX\miktex\data\le\pdftex\pdflatex.fmt
-INPUT main.tex
+INPUT g:\Мой диск\Skoltech\DL\Project\DL_final_project\presentation\main.tex
 OUTPUT main.log
 INPUT C:\Users\Антон\AppData\Local\Programs\MiKTeX\tex\latex\beamer\beamer.cls
 INPUT C:\Users\Антон\AppData\Local\Programs\MiKTeX\tex\latex\beamer\beamer.cls
@@ -581,8 +581,6 @@ INPUT .\results\ddrm_blur.png
 INPUT .\results\ddrm_blur.png
 INPUT .\results\ddrm_blur.png
 INPUT C:\Users\Антон\AppData\Local\Programs\MiKTeX\fonts\tfm\public\lm\ec-lmss8.tfm
-INPUT C:\Users\Антон\AppData\Local\Programs\MiKTeX\fonts\tfm\public\lm\ec-lmssbx10.tfm
-INPUT C:\Users\Антон\AppData\Local\Programs\MiKTeX\fonts\tfm\public\lm\ec-lmsso8.tfm
 OUTPUT main.nav
 OUTPUT main.toc
 OUTPUT main.snm

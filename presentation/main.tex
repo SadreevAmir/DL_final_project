@@ -37,6 +37,7 @@
 \title[Diffusion for Inverse Problems]{Diffusion-Based Methods for Inverse Problems in Physical Data}
 
 \author[Abdullaeva, Efimov, Losev, Sadreev]{%
+  \textbf{Students}\\[0.2em]
   Mariia Abdullaeva \and Andrei Efimov \and Anton Losev \and Amir Sadreev}
 
 \institute[Skoltech]{Skolkovo Institute of Science and Technology\\Deep Learning Final Project}
@@ -48,7 +49,25 @@
 \begin{document}
 % ─────────────────────────────────────────────────────────────
 
-\frame[plain]{\titlepage}
+\begin{frame}[plain]
+\begin{center}
+\vspace*{1.0cm}
+\begin{beamercolorbox}[sep=8pt,center,rounded=true,shadow=true]{title}
+  {\usebeamerfont{title}\inserttitle\par}
+\end{beamercolorbox}
+\vspace{1.0cm}
+Skolkovo Institute of Science and Technology\\
+Deep Learning Final Project\\[0.35cm]
+\makebox[\textwidth][r]{%
+  \begin{tabular}{@{}l@{}}
+  {\scriptsize\textbf{Students:} Mariia Abdullaeva, Andrei Efimov,}\\
+  {\scriptsize\hspace{4.7em}Anton Losev, Amir Sadreev}
+  \end{tabular}}
+\vspace{0.35cm}
+
+\includegraphics[width=4cm]{Logo.png}
+\end{center}
+\end{frame}
 
 \begin{frame}{Outline}
   \tableofcontents
@@ -653,8 +672,19 @@ Helmholtz projection consistently reduces divergence for DDNM, RePaint, and DDRM
 
 % ─────────────────────────────────────────────────────────────
 
-\begin{frame}{References}
-\footnotesize
+\begin{frame}{References and Contributions}
+
+\begin{block}{Contributions}
+\begin{tabular}{ll}
+Mariia Abdullaeva & RePaint \\
+Andrei Efimov & DDNM \\
+Anton Losev & DDRM \\
+Amir Sadreev & model training and DPS sampler \\
+\end{tabular}
+\end{block}
+\vspace{0.1cm}
+
+\scriptsize
 \begin{enumerate}
   \item H. Chung, J. Kim, M. T. Mccann, M. L. Klasky, J. C. Ye.
         \textit{Diffusion Posterior Sampling for General Noisy Inverse Problems.}
